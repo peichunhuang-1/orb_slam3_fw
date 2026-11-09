@@ -16,5 +16,6 @@ subpixel: true
 subpixel_half_window: 5
 subpixel_range: 5
 subpixel_fit: ssd       # ssd | sad | sad_v
+subpixel_device: auto   # auto | gpu | cpu (auto: GPU when orb_extractor runs on the GPU)
 # calibration
 max_fit_error_px: 0.5

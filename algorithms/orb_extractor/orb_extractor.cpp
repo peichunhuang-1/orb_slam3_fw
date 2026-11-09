@@ -5,9 +5,13 @@
 //   image    : fw::Image, mono8 (or any CV_8UC1), bgr8 / rgb8 / bgra8 / rgba8 (converted to gray)
 //   params   : OrbExtractorParams (latest; optional, every field has a default). A change rebuilds
 //              the extractor from the next image on.
+//   gpu      : gpu::Device (resource, write), the box's GPU (types/gpu/device.hpp): shared with the other
+//              GPU blocks (orb_matcher reads the GPU pyramids on it). Taken on every image, also with the
+//              CPU backend (the port is the same; nothing runs on the GPU then).
 //   features : orb::Features, keypoints in full-resolution coordinates (octave = level) and
 //              N x 32 CV_8U descriptors (cv::ORB bit layout), same stamp as the image; the image size,
-//              the levels' scale factors and (params keep_pyramid) a copy of the pyramid
+//              the levels' scale factors and (params keep_pyramid) the pyramid without a CPU copy:
+//              GPU: orb::Features::gpu_pyramid (copied on the GPU), CPU: orb::Features::pyramid (shared)
 //
 // backend auto: the GPU, set up on the first image (~0.1-0.2 s); if that fails, or the GPU fails
 // later (e.g. device lost), the CPU from then on, reported as degraded. gpu: GPU only (a failure is
@@ -25,6 +29,7 @@
 #include "fw/ros/msgs/image.hpp"
 #include "algorithms/orb_extractor/orb_cpu.hpp"
 #include "params/orb_extractor_params.hpp"
+#include "types/gpu/device.hpp"
 #include "types/orb/features.hpp"
 #ifdef ORB_HAVE_VULKAN
 #include "algorithms/orb_extractor/vk/orb_vk_slam.hpp"
@@ -127,30 +132,28 @@ struct OrbExtractor {
         if (backend == "cpu") cpu = std::move(fresh);
     }
 
-    // Image size, scale factors and (keep_pyramid) a copy of the pyramid: the extractor's own is
-    // overwritten by the next frame (GPU: views of GPU memory).
-    void set_levels(const cv::Mat& g, const std::vector<float>& scales, const std::vector<cv::Mat>& pyr,
-                    orb::Features& out) const {
+    // Image size and scale factors; the pyramid (keep_pyramid) is set by the backend: no CPU copy either way.
+    void set_levels(const cv::Mat& g, const std::vector<float>& scales, orb::Features& out) const {
         out.width = g.cols;
         out.height = g.rows;
         out.scale_factors = scales;
         out.pyramid.clear();
-        if (!keep_pyramid) return;
-        out.pyramid.reserve(pyr.size());
-        for (const cv::Mat& level : pyr) out.pyramid.push_back(level.clone());
+        out.gpu_pyramid.reset();
     }
 
 #ifdef ORB_HAVE_VULKAN
     // GPU extraction; false when the CPU has to do this frame (auto after a GPU failure).
-    bool extract_gpu(fw::Context& ctx, const cv::Mat& g, orb::Features& out) {
+    bool extract_gpu(fw::Context& ctx, const cv::Mat& g, ::gpu::Device& device, orb::Features& out) {
         if (gpu_failed) return false;
         try {
             if (!gpu) {
-                gpu = std::make_unique<orbvk::ORBextractorVk>(to_gpu_config(cfg));
+                gpu = std::make_unique<orbvk::ORBextractorVk>(to_gpu_config(cfg), device.context());
                 gpu->Prepare(g.cols, g.rows);   // GPU set-up and a warm-up frame
             }
             (*gpu)(g, cv::Mat(), out.keypoints, out.descriptors, lap);
-            set_levels(g, gpu->GetScaleFactors(), gpu->mvImagePyramid, out);
+            set_levels(g, gpu->GetScaleFactors(), out);
+            // copied on the GPU into a pooled buffer: the extractor's own is overwritten by the next frame
+            if (keep_pyramid) out.gpu_pyramid = gpu->SnapshotPyramid();
             const orbvk::FrameInfo& fi = gpu->LastFrame();
             if (fi.aborted)
                 report(ctx, fw::Health::degraded,
@@ -178,7 +181,9 @@ struct OrbExtractor {
         cpu->extract(g, out.keypoints, out.descriptors, [&ctx](int begin, int end, const std::function<void(int)>& fn) {
             fw::parallel_for(ctx, (std::size_t)begin, (std::size_t)end, [&fn](std::size_t i) { fn((int)i); }, 1);
         });
-        set_levels(g, cpu->scale_factors(), cpu->pyramid(), out);
+        set_levels(g, cpu->scale_factors(), out);
+        // shared, not copied: orb_cpu builds the next frame's in new images while this one is held
+        if (keep_pyramid) out.pyramid = cpu->pyramid();
         const orb_cpu::FrameInfo& fi = cpu->last_frame();
         if (fi.aborted)
             report(ctx, fw::Health::degraded, "abnormal frame: " + std::to_string(fi.corners) + " FAST corners, no keypoints");
@@ -193,14 +198,15 @@ struct OrbExtractor {
     }
 
     void operator()(fw::Context& ctx, const fw::Image& image, const OrbExtractorParams& params,
-                    orb::Features& features) {
+                    fw::Write<::gpu::Device> device, orb::Features& features) {
         features.extract_start_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                         std::chrono::steady_clock::now().time_since_epoch()).count();
         reconfigure(params);
         const cv::Mat& g = to_gray(image, gray);
 #ifdef ORB_HAVE_VULKAN
-        if (backend != "cpu" && extract_gpu(ctx, g, features)) return;
+        if (backend != "cpu" && extract_gpu(ctx, g, *device, features)) return;
 #else
+        (void)device;
         if (backend == "gpu") {
             report(ctx, fw::Health::error, "backend gpu: built without Vulkan");
             throw std::runtime_error("orb_extractor: backend gpu, but built without Vulkan");
@@ -214,5 +220,6 @@ struct OrbExtractor {
 
 FW_REGISTER_ALGORITHM_CLASS(OrbExtractor,
     INPUTS(("image", fw::Image, trigger), ("params", OrbExtractorParams, latest)),
+    RESOURCES(("gpu", gpu::Device, write)),
     OUTPUTS(("features", orb::Features)),
     OPTIONS(THREADS(4)));

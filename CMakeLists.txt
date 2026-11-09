@@ -102,9 +102,21 @@ if(ORB_EXTRACTOR_VULKAN AND Vulkan_FOUND AND GLSLANG)
       COMMENT "SPIR-V ${s}.comp")
     list(APPEND ORB_SPV_HEADERS ${out})
   endforeach()
+  # orb_matcher's sub-pixel refinement on the GPU (algorithms/orb_matcher/gpu), same device as the extractor
+  set(ORB_MATCHER_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/algorithms/orb_matcher/gpu/shaders)
+  foreach(s subpixel)
+    set(out ${ORB_GEN_DIR}/spv_${s}.h)
+    add_custom_command(
+      OUTPUT ${out}
+      COMMAND ${GLSLANG} -V --target-env vulkan1.1 --vn spv_${s} -o ${out} ${ORB_MATCHER_SHADER_DIR}/${s}.comp
+      DEPENDS ${ORB_MATCHER_SHADER_DIR}/${s}.comp
+      COMMENT "SPIR-V ${s}.comp")
+    list(APPEND ORB_SPV_HEADERS ${out})
+  endforeach()
   add_custom_target(orb_extractor_shaders DEPENDS ${ORB_SPV_HEADERS})
   # Vulkan create-info structs are written {VK_STRUCTURE_TYPE_...}: the other members zero on purpose
   set_source_files_properties(algorithms/orb_extractor/vk/orb_vk.cpp algorithms/orb_extractor/vk/orb_vk_slam.cpp
+                              types/gpu/context.cpp algorithms/orb_matcher/gpu/subpixel_vk.cpp
                               PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
   add_dependencies(${FW_BLOCKS_TARGET} orb_extractor_shaders)
   target_include_directories(${FW_BLOCKS_TARGET} PRIVATE ${ORB_GEN_DIR})
@@ -114,11 +126,25 @@ if(ORB_EXTRACTOR_VULKAN AND Vulkan_FOUND AND GLSLANG)
 
   # GPU vs CPU backend check, bit for bit (not installed): build/orb_slam3_fw/orb_gpu_vs_cpu [image.pgm ...]
   add_executable(orb_gpu_vs_cpu tests/orb_gpu_vs_cpu.cpp algorithms/orb_extractor/orb_cpu.cpp
-                                algorithms/orb_extractor/vk/orb_vk.cpp algorithms/orb_extractor/vk/orb_vk_slam.cpp)
+                                algorithms/orb_extractor/vk/orb_vk.cpp algorithms/orb_extractor/vk/orb_vk_slam.cpp
+                                types/gpu/context.cpp)
   add_dependencies(orb_gpu_vs_cpu orb_extractor_shaders)
   target_include_directories(orb_gpu_vs_cpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${ORB_GEN_DIR} ${OpenCV_INCLUDE_DIRS})
   target_compile_definitions(orb_gpu_vs_cpu PRIVATE ORB_HAVE_VULKAN=1)
   target_link_libraries(orb_gpu_vs_cpu Vulkan::Vulkan ${OpenCV_LIBS})
+
+  # orb_matcher sub-pixel refinement, GPU (shader) vs CPU (SubpixelRefiner) on the same searches, and the
+  # extractor's GPU pyramid handover (not installed): build/orb_slam3_fw/orb_matcher_subpixel_gpu_test
+  add_executable(orb_matcher_subpixel_gpu_test tests/orb_matcher/subpixel_gpu_test.cpp algorithms/orb_extractor/orb_cpu.cpp
+                 algorithms/orb_matcher/gpu/subpixel_vk.cpp types/gpu/context.cpp
+                 algorithms/orb_extractor/vk/orb_vk.cpp algorithms/orb_extractor/vk/orb_vk_slam.cpp)
+  add_dependencies(orb_matcher_subpixel_gpu_test orb_extractor_shaders)
+  target_include_directories(orb_matcher_subpixel_gpu_test PRIVATE ${ORB_GEN_DIR})
+  target_compile_definitions(orb_matcher_subpixel_gpu_test PRIVATE ORB_HAVE_VULKAN=1)
+  target_link_libraries(orb_matcher_subpixel_gpu_test orb_matcher_core Vulkan::Vulkan opencv_imgproc)
+  if(BUILD_TESTING)
+    add_test(NAME orb_matcher_subpixel_gpu_test COMMAND orb_matcher_subpixel_gpu_test)
+  endif()
 else()
   message(STATUS "orb_extractor: Vulkan or glslangValidator not found, CPU backend only")
 endif()

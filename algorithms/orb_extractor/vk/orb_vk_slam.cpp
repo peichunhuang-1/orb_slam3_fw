@@ -28,7 +28,8 @@ ORBextractorVk::ORBextractorVk(int nfeatures, float scaleFactor, int nlevels, in
           return c;
       }()) {}
 
-ORBextractorVk::ORBextractorVk(const ExtractorConfig& cfg) : cfg_(cfg), thr_(cfg.iniThFAST) {
+ORBextractorVk::ORBextractorVk(const ExtractorConfig& cfg, std::shared_ptr<gpu::Context> ctx)
+    : cfg_(cfg), ctx_(std::move(ctx)), thr_(cfg.iniThFAST) {
     if (cfg_.nFeatures < 1 || cfg_.nLevels < 1 || cfg_.nLevels > 16 || cfg_.scaleFactor <= 1.f)
         throw std::runtime_error("ORBextractorVk: need nFeatures >= 1, 1 <= nLevels <= 16, scaleFactor > 1");
     if (cfg_.minThFAST < 1 || cfg_.minThFAST > cfg_.iniThFAST)
@@ -80,7 +81,7 @@ void ORBextractorVk::ensureGpu(int w, int h) {
     p.perfEach = cfg_.perfEach;
     p.listPipelines = cfg_.listPipelines;
     orb_.reset();  // release the old GPU resources first
-    orb_ = std::make_unique<OrbVk>(w, h, p, cfg_.allowCpuDevice);
+    orb_ = std::make_unique<OrbVk>(w, h, p, cfg_.allowCpuDevice, ctx_);
     pyramidPixels_ = 0;
     for (const LevelInfo& L : orb_->levels()) pyramidPixels_ += (long)L.w * L.h;
     if ((int)orb_->levels().size() < cfg_.nLevels) {

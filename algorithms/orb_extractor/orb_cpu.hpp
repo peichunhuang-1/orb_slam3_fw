@@ -77,7 +77,8 @@ public:
     const Config& config() const { return cfg_; }
     const FrameInfo& last_frame() const { return info_; }
     // Pyramid of the last frame, one CV_8UC1 per level that fits (level 0 = the image copy).
-    // Valid until the next extract(); ORB-SLAM3's stereo matching reads it.
+    // Copies of these cv::Mat (shared data) stay valid: the next extract() writes a level held by
+    // someone else into a new image. ORB-SLAM3's stereo matching reads it.
     const std::vector<cv::Mat>& pyramid() const { return pyr_; }
     const std::vector<Level>& levels() const { return levels_; }
 

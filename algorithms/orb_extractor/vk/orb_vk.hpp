@@ -5,9 +5,12 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "types/gpu/context.hpp"
 
 struct OrbParams {
     int   nfeatures     = 1000;   // keypoints kept after per-level selection
@@ -110,7 +113,11 @@ class OrbVk {
 public:
     // The resolution is fixed per instance: buffers and the command buffer are built once.
     // allowCpuDevice permits falling back to a software rasterizer such as llvmpipe.
-    OrbVk(int width, int height, const OrbParams& p = {}, bool allowCpuDevice = false);
+    // ctx: the device to run on (in a graph: the box's gpu/Device resource, types/gpu/device.hpp); null =
+    // a device of its own. OrbParams::perfCounters always gets one of its own (with VK_KHR_performance_query).
+    // Not thread safe, like the context: one thread at a time per device.
+    OrbVk(int width, int height, const OrbParams& p = {}, bool allowCpuDevice = false,
+          std::shared_ptr<gpu::Context> ctx = nullptr);
     ~OrbVk();
     OrbVk(const OrbVk&) = delete;
     OrbVk& operator=(const OrbVk&) = delete;
@@ -137,6 +144,13 @@ public:
     // Level l of pyramid `image` from the last run, in GPU-visible memory (row stride
     // levels()[l].stride). Valid until the next run.
     const uint8_t* pyramidLevel(int l, int image = 0) const;
+    // A copy of the last run's pyramid `image` made on the GPU (no CPU copy) into a buffer of a pool:
+    // valid until the returned pointer and its copies are released, whatever runs after. For readers on
+    // the same device (context()), e.g. orb_matcher's sub-pixel shader. Waits for the copy (~0.36 ms
+    // GPU for 752x480 on a Pi 5).
+    std::shared_ptr<const gpu::Pyramid> snapshotPyramid(int image = 0);
+    size_t pyramidBuffers() const;   // pool buffers created by snapshotPyramid so far
+    const std::shared_ptr<gpu::Context>& context() const { return ctx_; }
 
     // Read back results of the last run (for verification or custom selection).
     void readCandidates(std::vector<OrbCandidate>& out, bool* overflow = nullptr) const;
@@ -193,6 +207,10 @@ private:
     size_t totalPixels_ = 0;   // pixels in the compact layout
     size_t totalBytes_  = 0;   // bytes of one packed GPU pyramid
 
+    std::shared_ptr<gpu::Context> ctx_;   // owns the instance and the device (types/gpu/context.hpp)
+    std::shared_ptr<gpu::PyramidPool> pool_;   // snapshotPyramid
+    VkCommandBuffer copyCmd_ = VK_NULL_HANDLE;
+    VkFence         copyFence_ = VK_NULL_HANDLE;
     VkInstance       inst_  = VK_NULL_HANDLE;
     VkPhysicalDevice phys_  = VK_NULL_HANDLE;
     VkDevice         dev_   = VK_NULL_HANDLE;

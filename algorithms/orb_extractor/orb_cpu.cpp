@@ -225,7 +225,10 @@ void Extractor::extract(const cv::Mat& gray, std::vector<cv::KeyPoint>& keypoint
         return cy * L.gw + cx;
     };
 
-    // 1. pyramid (sequential: each level comes from the previous one)
+    // 1. pyramid (sequential: each level comes from the previous one). A level still held by someone
+    // else (the previous frame's pyramid() handed downstream) is replaced by a new image, not overwritten.
+    for (cv::Mat& m : pyr_)
+        if (m.u && CV_XADD(&m.u->refcount, 0) > 1) m = cv::Mat(m.rows, m.cols, CV_8UC1);
     gray.copyTo(pyr_[0]);
     for (int l = 1; l < nl; ++l) downscale(pyr_[l - 1], pyr_[l]);
 

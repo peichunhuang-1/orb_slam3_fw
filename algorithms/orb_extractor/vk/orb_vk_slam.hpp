@@ -4,6 +4,7 @@
 // threshold policies (per-cell threshold, distribution, abnormal frames). Used by
 // the orb_extractor block (algorithms/orb_extractor/orb_extractor.cpp).
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -72,7 +73,8 @@ class ORBextractorVk {
 public:
     // Same arguments as ORB_SLAM3::ORBextractor; other options come from defaultConfig().
     ORBextractorVk(int nfeatures, float scaleFactor, int nlevels, int iniThFAST, int minThFAST);
-    explicit ORBextractorVk(const ExtractorConfig& cfg);
+    // ctx: the device (in a graph the box's gpu/Device resource, types/gpu/device.hpp); null = its own.
+    explicit ORBextractorVk(const ExtractorConfig& cfg, std::shared_ptr<gpu::Context> ctx = nullptr);
     ~ORBextractorVk();
 
     // Options used by the 5-argument constructor (which ORB-SLAM3's Tracking calls). Set them
@@ -113,11 +115,19 @@ public:
     // used by ORB-SLAM3's stereo matching.
     std::vector<cv::Mat> mvImagePyramid;
 
+    // The last frame's pyramid copied on the GPU into a pooled buffer (OrbVk::snapshotPyramid): stays
+    // valid after the next frame, for GPU readers on the same context (orb_matcher's sub-pixel shader).
+    std::shared_ptr<const gpu::Pyramid> SnapshotPyramid() {
+        if (!orb_) throw std::runtime_error("ORBextractorVk::SnapshotPyramid: no frame yet");
+        return orb_->snapshotPyramid();
+    }
+
 private:
     void ensureGpu(int w, int h);
     void adapt();
 
     ExtractorConfig cfg_;
+    std::shared_ptr<gpu::Context> ctx_;   // null: OrbVk makes its own
     std::unique_ptr<OrbVk> orb_;
     int thr_ = 20;
     long pyramidPixels_ = 0;

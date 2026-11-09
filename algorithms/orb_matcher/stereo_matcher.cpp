@@ -48,17 +48,14 @@ struct StereoMatcher::Impl {
     }
 
     // Moves the right pixel uvR (and its bearing fR, right camera frame) onto the left keypoint's
-    // epipolar curve (θ_R := θ_L, φ_R kept), then along it to where the left keypoint's patch
-    // matches best, on the left keypoint's level (patches aligned with the epipolar directions of
-    // their image). Starting on the curve matters: an offset across
-    // it would be partly traded for an offset along it by oblique texture (aperture problem).
-    bool refineRight(const cv::KeyPoint& kl, const Eigen::Vector3f& fL, float thetaL, const ViewFeatures& L,
-                     const ViewFeatures& R, const std::vector<float>& scale, Eigen::Vector2f& uvR, Eigen::Vector3f& fR) {
+    // epipolar curve (θ_R := θ_L, φ_R kept) and sets up the search along it, on the left keypoint's
+    // level (patches aligned with the epipolar directions of their image). Starting on the curve
+    // matters: an offset across it would be partly traded for an offset along it by oblique texture
+    // (aperture problem). The search itself: cpuRefine or a SubpixelBackend.
+    bool prepareRight(const cv::KeyPoint& kl, const Eigen::Vector3f& fL, float thetaL, const std::vector<float>& scale,
+                      Eigen::Vector2f& uvR, Eigen::Vector3f& fR, SubpixelJob& job) const {
         const int lvl = kl.octave;
-        if (lvl < 0 || lvl >= L.pyramid_levels || lvl >= R.pyramid_levels || lvl >= int(scale.size())) return false;
-        const cv::Mat& imL = L.pyramid[lvl];
-        const cv::Mat& imR = R.pyramid[lvl];
-        if (imL.type() != CV_8UC1 || imR.type() != CV_8UC1) return false;
+        if (lvl < 0 || lvl >= int(scale.size())) return false;
         const KannalaBrandt8& camR = rig.camera(1);
         {
             const Eigen::Vector3f pr = R_rR * fR;   // rectification frame
@@ -70,15 +67,33 @@ struct StereoMatcher::Impl {
         Eigen::Vector2f dirL, dirR;
         if (!epipolarDirection(rig.camera(0), fL, b1, dirL) || !epipolarDirection(camR, fR, b2, dirR)) return false;
         const float s = scale[lvl];
-        float off;
-        if (!sub.refine(imL, Eigen::Vector2f(kl.pt.x, kl.pt.y) / s, dirL, imR, uvR / s, dirR, off)) return false;
-        const Eigen::Vector2f uv = uvR + off * s * dirR;
-        Eigen::Vector3f f;
-        if (!camR.unproject(uv, f)) return false;
-        uvR = uv;
-        fR = f;
+        job.level = lvl;
+        job.left = Eigen::Vector2f(kl.pt.x, kl.pt.y) / s;
+        job.dirL = dirL;
+        job.right = uvR / s;
+        job.dirR = dirR;
         return true;
     }
+
+    // The search of one job on the CPU, on the views' pyramids.
+    bool cpuRefine(const SubpixelJob& j, const ViewFeatures& L, const ViewFeatures& R, float& off) {
+        const int lvl = j.level;
+        if (lvl >= L.pyramid_levels || lvl >= R.pyramid_levels) return false;
+        const cv::Mat& imL = L.pyramid[lvl];
+        const cv::Mat& imR = R.pyramid[lvl];
+        if (imL.type() != CV_8UC1 || imR.type() != CV_8UC1) return false;
+        return sub.refine(imL, j.left, j.dirL, imR, j.right, j.dirR, off);
+    }
+
+    // Sub-pixel jobs of one match() call, in the order they were prepared
+    struct Pending {
+        int i, r;
+        Eigen::Vector2f uvR;   // right pixel on the left keypoint's epipolar curve
+    };
+    std::vector<SubpixelJob> jobs;
+    std::vector<Pending> pending;
+    std::vector<float> offsets;
+    std::vector<uint8_t> refined;
 
     void reserve(int n) {
         bl.reserve(n);
@@ -88,6 +103,10 @@ struct StereoMatcher::Impl {
         candD.reserve(n);
         bestD.reserve(n);
         bestL.reserve(n);
+        jobs.reserve(n);
+        pending.reserve(n);
+        offsets.reserve(n);
+        refined.reserve(n);
     }
 
     // Disparity angle of a point at `range` from C1 seen at angle phiL to the baseline.
@@ -151,14 +170,14 @@ void StereoMatcher::check_image_size(int width, int height) const {
 }
 
 void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, const std::vector<float>& scale_factors,
-                          StereoMatches& out) {
+                          StereoMatches& out, SubpixelBackend* backend) {
     const auto t0 = std::chrono::steady_clock::now();
     Impl& m = *impl_;
     const StereoMatcherParams& p = m.p;
     const int nl = left.n, nr = right.n;
     if ((nl > 0 && (!left.keypoints || !left.descriptors)) || (nr > 0 && (!right.keypoints || !right.descriptors)))
         throw std::invalid_argument("StereoMatcher::match: keypoints without descriptors");
-    if (p.subpixel && ((nl > 0 && !left.pyramid) || (nr > 0 && !right.pyramid)))
+    if (p.subpixel && !backend && ((nl > 0 && !left.pyramid) || (nr > 0 && !right.pyramid)))
         throw std::invalid_argument("StereoMatcher::match: subpixel needs the image pyramids (orb_extractor keep_pyramid)");
 
     StereoMatchStats st;
@@ -234,6 +253,20 @@ void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, c
         const float s = p.sigma_px * (top >= 0 ? scale_factors[std::clamp(octave, 0, top)] : 1.f);
         return s * s;
     };
+    // too little parallax for a reliable depth (checked last, on the final γ, so a far true match
+    // becomes a monocular point instead of letting a nearer wrong candidate win)
+    auto accept = [&](int i, int r, const Eigen::Vector2f& uvR, float phiR, const Eigen::Vector3f& P) {
+        if (phiR - m.bl.phi[i] < m.minParallax) { ++st.rejected_parallax; return; }
+        out.right_uv[i] = uvR;
+        out.left_to_right[i] = r;
+        out.right_to_left[r] = i;
+        out.points[i] = P;
+        out.depth[i] = P.z();
+        out.distance[i] = m.candD[i];
+        ++st.matched;
+    };
+    m.jobs.clear();
+    m.pending.clear();
     for (int i = 0; i < nl; ++i) {
         const int r = m.candR[i];
         if (r < 0) continue;
@@ -258,28 +291,51 @@ void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, c
             ++st.rejected_reproj;
             continue;
         }
-        if (p.subpixel) {
+        if (p.subpixel) {   // prepared here, searched for all matches at once below
             const auto ts = std::chrono::steady_clock::now();
             Eigen::Vector3f fRcam = m.br.f[r];
-            bool ok = m.refineRight(kl, m.bl.f[i], m.bl.theta[i], left, right, scale_factors, uvRk, fRcam);
-            if (ok) {
-                const Eigen::Vector3f fRr = m.R_rR * fRcam;
-                phiR = std::acos(std::clamp(fRr.x(), -1.f, 1.f));
-                ok = triangulateClosedForm(m.B, m.bl.phi[i], phiR, m.bl.f[i], P);
-            }
+            SubpixelJob job;
+            const bool ok = m.prepareRight(kl, m.bl.f[i], m.bl.theta[i], scale_factors, uvRk, fRcam, job);
             st.subpixel_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ts).count();
             if (!ok) { ++st.rejected_subpixel; continue; }
+            m.jobs.push_back(job);
+            m.pending.push_back({i, r, uvRk});
+            continue;
         }
-        // too little parallax for a reliable depth (checked last, on the final γ, so a far true match
-        // becomes a monocular point instead of letting a nearer wrong candidate win)
-        if (phiR - m.bl.phi[i] < m.minParallax) { ++st.rejected_parallax; continue; }
-        out.right_uv[i] = uvRk;
-        out.left_to_right[i] = r;
-        out.right_to_left[r] = i;
-        out.points[i] = P;
-        out.depth[i] = P.z();
-        out.distance[i] = m.candD[i];
-        ++st.matched;
+        accept(i, r, uvRk, phiR, P);
+    }
+
+    // 4. sub-pixel search along the epipolar lines, then triangulate again
+    if (!m.jobs.empty()) {
+        const auto ts = std::chrono::steady_clock::now();
+        const int nj = int(m.jobs.size());
+        m.offsets.resize(nj);
+        m.refined.resize(nj);
+        if (backend) {
+            backend->refine(m.jobs.data(), nj, m.offsets.data(), m.refined.data());
+        } else {
+            for (int k = 0; k < nj; ++k) m.refined[k] = m.cpuRefine(m.jobs[k], left, right, m.offsets[k]);
+        }
+        for (int k = 0; k < nj; ++k) {
+            const Impl::Pending& q = m.pending[k];
+            const SubpixelJob& j = m.jobs[k];
+            Eigen::Vector3f P, f;
+            float phiR = 0;
+            bool ok = m.refined[k];
+            Eigen::Vector2f uv;
+            if (ok) {
+                uv = q.uvR + m.offsets[k] * scale_factors[j.level] * j.dirR;
+                ok = camR.unproject(uv, f);
+            }
+            if (ok) {
+                const Eigen::Vector3f fRr = m.R_rR * f;
+                phiR = std::acos(std::clamp(fRr.x(), -1.f, 1.f));
+                ok = triangulateClosedForm(m.B, m.bl.phi[q.i], phiR, m.bl.f[q.i], P);
+            }
+            if (!ok) { ++st.rejected_subpixel; continue; }
+            accept(q.i, q.r, uv, phiR, P);
+        }
+        st.subpixel_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ts).count();
     }
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     out.stats = st;

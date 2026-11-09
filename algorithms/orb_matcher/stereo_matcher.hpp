@@ -97,6 +97,22 @@ struct ViewFeatures {
     int pyramid_levels = 0;
 };
 
+// One sub-pixel search (level-pixel coordinates on pyramid level `level` of both views): the patch at
+// `left` (columns along dirL) against the strip through `right` along dirR. See SubpixelRefiner::refine.
+struct SubpixelJob {
+    int level = 0;
+    Eigen::Vector2f left, dirL, right, dirR;
+};
+
+// Runs the sub-pixel searches somewhere else than on the views' cv::Mat pyramids (e.g. on the GPU,
+// algorithms/orb_matcher/gpu/subpixel_vk.hpp), with StereoMatcherParams' window, range and fit.
+// offset[k]: along jobs[k].dirR in level pixels; ok[k] = 0 where SubpixelRefiner::refine would fail.
+class SubpixelBackend {
+public:
+    virtual ~SubpixelBackend() = default;
+    virtual void refine(const SubpixelJob* jobs, int n, float* offset, uint8_t* ok) = 0;
+};
+
 class StereoMatcher {
 public:
     // Throws std::invalid_argument for invalid parameters.
@@ -107,8 +123,10 @@ public:
     StereoMatcher& operator=(const StereoMatcher&) = delete;
 
     // scale_factors[l] = scale of pyramid level l (orb::Features::scale_factors).
+    // With subpixel on, the searches run on `backend` when given (the views need no pyramids then),
+    // else on the views' pyramids on the CPU.
     void match(const ViewFeatures& left, const ViewFeatures& right, const std::vector<float>& scale_factors,
-               StereoMatches& out);
+               StereoMatches& out, SubpixelBackend* backend = nullptr);
 
     // Throws std::invalid_argument unless the images are the rig's size (a 1440 calibration
     // with 720 keypoints would match nothing and fail silently).

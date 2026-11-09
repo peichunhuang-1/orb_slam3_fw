@@ -38,4 +38,4 @@ FW_PARAMS(OrbExtractorParams,
           FIELD(edge_threshold, DEFAULT(19), RANGE(19, 200), DESC("border without keypoints"))),
     GROUP("output", PERSIST(ask),
           FIELD(keep_pyramid, DEFAULT(true),
-                DESC("copy the image pyramid into the features (orb_matcher's sub-pixel refinement; ~1.2x the image per frame)"))))
+                DESC("pass the image pyramid in the features (orb_matcher's sub-pixel refinement): GPU: a copy made on the GPU, CPU: shared"))))

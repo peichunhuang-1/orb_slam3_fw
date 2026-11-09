@@ -5,6 +5,11 @@
 //
 //   left, right : orb::Features (sync), from orb_extractor. Sub-pixel refinement reads their pyramids
 //                 (orb_extractor keep_pyramid, on by default); without them it is skipped (degraded).
+//                 GPU pyramids (orb::Features::gpu_pyramid, the extractor on the GPU) are refined on the
+//                 GPU (gpu/subpixel_vk.hpp: no pixel goes through the CPU), CPU ones on the CPU;
+//                 params subpixel_device chooses (auto, gpu, cpu).
+//   gpu         : gpu::Device (resource, write), the box's GPU (types/gpu/device.hpp), the one the
+//                 extractors' GPU pyramids are on: the sub-pixel shader runs there. Taken on every pair.
 //   calib       : calib::StereoImuRig (latest), from euroc_mcap_driver. Each camera as KB8: a KB8
 //                 (equidistant) calibration as is, radtan (plumb_bob) by a KB8 fit (rig_from_calib.hpp).
 //                 Resized to the features' image size when that differs (same aspect ratio).
@@ -25,9 +30,13 @@
 
 #include "algorithms/orb_matcher/rig_from_calib.hpp"
 #include "algorithms/orb_matcher/stereo_matcher.hpp"
+#ifdef ORB_HAVE_VULKAN
+#include "algorithms/orb_matcher/gpu/subpixel_vk.hpp"
+#endif
 #include "fw/fw.hpp"
 #include "params/orb_matcher_params.hpp"
 #include "types/calib/stereo_imu_rig.hpp"
+#include "types/gpu/device.hpp"
 #include "types/orb/features.hpp"
 #include "types/orb/match.hpp"
 
@@ -86,6 +95,16 @@ struct OrbMatcher {
     StereoMatcherParams mp;
     int width = 0, height = 0;
     orb_matcher::StereoMatches sm;       // reused: match() does not allocate after warm-up
+    // sub-pixel refinement
+#ifdef ORB_HAVE_VULKAN
+    std::unique_ptr<orb_matcher::SubpixelVk> gpu_sub;
+    std::shared_ptr<gpu::Context> gpu_failed_ctx;   // the GPU refinement failed on this context: CPU
+    std::string gpu_failed_msg;
+#endif
+    std::vector<cv::Mat> mapped[2];      // CPU refinement on GPU pyramids: views of their (slow) mapping
+    long sub_pairs[3] = {0, 0, 0};       // pairs refined on: none, CPU, GPU
+    long sub_jobs = 0, sub_rejected = 0; // sub-pixel searches, and matches they dropped
+    orb::MatchStats totals;              // summed over the pairs
     // health
     fw::Health health = fw::Health::ok;
     std::string health_msg;
@@ -131,7 +150,8 @@ struct OrbMatcher {
     }
 
     void on_pair(fw::Context& ctx, const orb::Features& left, const orb::Features& right,
-                 Msg<calib::StereoImuRig> cal, const OrbMatcherParams& params, orb::Match& out) {
+                 Msg<calib::StereoImuRig> cal, const OrbMatcherParams& params, fw::Write<::gpu::Device> device_res,
+                 orb::Match& out) {
         update_calib(ctx, cal, params.max_fit_error_px);
 
         // image size: the features' (the extractor may run on a resized image), else the calibration's
@@ -147,8 +167,44 @@ struct OrbMatcher {
             throw std::invalid_argument("orb_matcher: the features have no scale_factors (orb_extractor fills them)");
 
         StereoMatcherParams want = to_matcher_params(params);
-        const bool pyramids = !left.pyramid.empty() && !right.pyramid.empty();
-        const bool no_pyramids = want.subpixel && !pyramids;
+        const std::string& device = params.subpixel_device;
+        if (device != "auto" && device != "gpu" && device != "cpu")
+            throw std::invalid_argument("orb_matcher: subpixel_device must be auto, gpu or cpu, not '" + device + "'");
+
+        // where the sub-pixel refinement runs: GPU (GPU pyramids), CPU (CPU pyramids, or GPU ones read
+        // through their mapping), or not at all (no pyramids)
+        enum Sub { sub_none, sub_cpu, sub_gpu } sub = sub_none;
+        std::string sub_note;
+        const bool mats = !left.pyramid.empty() && !right.pyramid.empty();
+        bool gpus = false;
+#ifdef ORB_HAVE_VULKAN
+        gpus = left.gpu_pyramid && right.gpu_pyramid && left.gpu_pyramid->ctx == right.gpu_pyramid->ctx;
+        // the shader runs on the box's device: the pyramids must be on it (the graph connects both to it)
+        const bool on_device = gpus && device_res->available() && device_res->context() == left.gpu_pyramid->ctx;
+#else
+        (void)device_res;
+#endif
+        if (want.subpixel) {
+            std::string why_not_gpu = device == "cpu" ? "subpixel_device cpu"
+                                                      : "the features have no GPU pyramids (orb_extractor on the CPU)";
+#ifdef ORB_HAVE_VULKAN
+            if (gpus && !on_device)
+                why_not_gpu = device_res->available() ? "the features' GPU pyramids are on another gpu/Device than this block's"
+                                                      : "gpu/Device: " + device_res->error();
+            if (device != "cpu" && on_device && ensure_gpu(left.gpu_pyramid->ctx, want, why_not_gpu)) sub = sub_gpu;
+#else
+            why_not_gpu = "built without Vulkan";
+#endif
+            if (sub == sub_none && device == "gpu") {
+                report(ctx, fw::Health::error, "subpixel_device gpu: " + why_not_gpu);
+                throw std::runtime_error("orb_matcher: subpixel_device gpu: " + why_not_gpu);
+            }
+            if (sub == sub_none && (mats || gpus)) {
+                sub = sub_cpu;
+                if (!mats) sub_note = "GPU pyramids read by the CPU (slow): " + why_not_gpu;
+            }
+        }
+        const bool no_pyramids = want.subpixel && sub == sub_none;
         if (no_pyramids) want.subpixel = false;   // match without the refinement rather than not at all
 
         if (!matcher || w != width || h != height || !same(want, mp)) {
@@ -162,7 +218,7 @@ struct OrbMatcher {
         }
 
         orb_matcher::ViewFeatures vl, vr;
-        auto view = [](const orb::Features& f, orb_matcher::ViewFeatures& v) {
+        auto view = [&](int side, const orb::Features& f, orb_matcher::ViewFeatures& v) {
             if (!f.keypoints.empty() &&
                 (f.descriptors.type() != CV_8UC1 || f.descriptors.cols != 32 || f.descriptors.rows != int(f.keypoints.size())))
                 throw std::invalid_argument("orb_matcher: descriptors must be N x 32 CV_8U, one row per keypoint");
@@ -170,12 +226,56 @@ struct OrbMatcher {
             v.n = int(f.keypoints.size());
             v.descriptors = f.descriptors.empty() ? nullptr : f.descriptors.ptr();
             v.stride = f.descriptors.empty() ? 32 : f.descriptors.step[0];
-            v.pyramid = f.pyramid.empty() ? nullptr : f.pyramid.data();
-            v.pyramid_levels = int(f.pyramid.size());
+            std::vector<cv::Mat>& m = mapped[side];
+            m.clear();
+#ifdef ORB_HAVE_VULKAN
+            if (sub == sub_cpu && f.pyramid.empty() && f.gpu_pyramid)
+                for (const gpu::Level& g : f.gpu_pyramid->levels)
+                    m.emplace_back(g.h, g.w, CV_8UC1, const_cast<uint8_t*>(f.gpu_pyramid->map) + g.goff, size_t(g.stride));
+#endif
+            const std::vector<cv::Mat>& pyr = m.empty() ? f.pyramid : m;
+            v.pyramid = pyr.empty() ? nullptr : pyr.data();
+            v.pyramid_levels = int(pyr.size());
         };
-        view(left, vl);
-        view(right, vr);
-        matcher->match(vl, vr, left.scale_factors, sm);
+        view(0, left, vl);
+        view(1, right, vr);
+        orb_matcher::SubpixelBackend* backend = nullptr;
+#ifdef ORB_HAVE_VULKAN
+        if (sub == sub_gpu) {
+            gpu_sub->set_pyramids(left.gpu_pyramid, right.gpu_pyramid);
+            backend = gpu_sub.get();
+        }
+        try {
+            matcher->match(vl, vr, left.scale_factors, sm, backend);
+        } catch (const std::exception& e) {
+            if (gpu_sub) gpu_sub->clear_pyramids();
+            if (sub != sub_gpu || device == "gpu") throw;
+            // the GPU failed: this pair and the next ones on the CPU (GPU pyramids read through the mapping)
+            gpu_failed_ctx = left.gpu_pyramid->ctx;
+            gpu_failed_msg = e.what();
+            gpu_sub.reset();
+            sub = sub_cpu;
+            view(0, left, vl);
+            view(1, right, vr);
+            matcher->match(vl, vr, left.scale_factors, sm);
+        }
+        if (gpu_sub) gpu_sub->clear_pyramids();   // the buffers go back to the extractor's pool
+#else
+        matcher->match(vl, vr, left.scale_factors, sm, backend);
+#endif
+        const orb_matcher::StereoMatchStats& s_ = sm.stats;
+        for (cv::Mat& v : mapped[0]) v.release();
+        for (cv::Mat& v : mapped[1]) v.release();
+        ++sub_pairs[sub];
+        totals.candidates += s_.candidates;
+        totals.hamming_evals += s_.hamming_evals;
+        totals.rejected_dist += s_.rejected_dist;
+        totals.rejected_ratio += s_.rejected_ratio;
+        totals.rejected_unique += s_.rejected_unique;
+        totals.rejected_parallax += s_.rejected_parallax;
+        totals.rejected_reproj += s_.rejected_reproj;
+        sub_rejected += sm.stats.rejected_subpixel;
+        if (sub != sub_none) sub_jobs += sm.stats.matched + sm.stats.rejected_subpixel;
 
         out.left_to_right = sm.left_to_right;
         out.right_to_left = sm.right_to_left;
@@ -210,13 +310,46 @@ struct OrbMatcher {
         sub_ms_sum += s.subpixel_ms;
         ms_max = std::max(ms_max, s.ms);
 
+        const std::string where = sub == sub_gpu ? ", sub-pixel on the GPU" : sub == sub_cpu ? ", sub-pixel on the CPU" : "";
         if (no_pyramids)
             report(ctx, fw::Health::degraded, "no pyramids in the features (orb_extractor keep_pyramid): sub-pixel refinement off");
+#ifdef ORB_HAVE_VULKAN
+        else if (sub == sub_cpu && gpu_failed_ctx && gpus && gpu_failed_ctx == left.gpu_pyramid->ctx)
+            report(ctx, fw::Health::degraded, "GPU sub-pixel refinement failed, on the CPU: " + gpu_failed_msg);
+#endif
         else if (fit_poor)
             report(ctx, fw::Health::degraded, fit_poor_msg);
         else
-            report(ctx, fw::Health::ok, model_note);
+            report(ctx, fw::Health::ok, model_note + where + (sub_note.empty() ? "" : " (" + sub_note + ")"));
     }
+
+#ifdef ORB_HAVE_VULKAN
+    // The GPU refinement for this context and parameters; false (why) when it cannot run.
+    bool ensure_gpu(const std::shared_ptr<gpu::Context>& gctx, const StereoMatcherParams& p, std::string& why) {
+        if (gctx == gpu_failed_ctx) {
+            why = "the GPU refinement failed: " + gpu_failed_msg;
+            return false;
+        }
+        if (!orb_matcher::SubpixelVk::supports(p.subpixel_half_window, p.subpixel_range)) {
+            why = "the GPU refinement supports subpixel_half_window <= 7 and subpixel_range <= 8";
+            return false;
+        }
+        if (gpu_sub && gpu_sub->context() == gctx.get() && gpu_sub->half_window() == p.subpixel_half_window &&
+            gpu_sub->range() == p.subpixel_range && gpu_sub->fit() == p.subpixel_fit)
+            return true;
+        try {
+            gpu_sub.reset();
+            gpu_sub = std::make_unique<orb_matcher::SubpixelVk>(gctx, p.subpixel_half_window, p.subpixel_range,
+                                                                p.subpixel_fit);
+            return true;
+        } catch (const std::exception& e) {
+            gpu_failed_ctx = gctx;
+            gpu_failed_msg = e.what();
+            why = "the GPU refinement failed: " + gpu_failed_msg;
+            return false;
+        }
+    }
+#endif
 
     void on_eos() {
         if (pairs == 0) {
@@ -227,6 +360,16 @@ struct OrbMatcher {
             if (pairs > 1)
                 std::printf("orb_matcher: output %.2f Hz (wall clock, first to last match over %.1f s)\n",
                             double(pairs - 1) / (double(last_ns - first_ns) * 1e-9), double(last_ns - first_ns) * 1e-9);
+            const double np = double(pairs);
+            std::printf("orb_matcher: per pair: %.1f hamming evaluations; rejected: distance %.1f, ratio %.1f, unique %.1f, "
+                        "parallax %.1f, reprojection %.1f, sub-pixel %.1f\n",
+                        totals.hamming_evals / np, totals.rejected_dist / np, totals.rejected_ratio / np,
+                        totals.rejected_unique / np, totals.rejected_parallax / np, totals.rejected_reproj / np,
+                        double(sub_rejected) / np);
+            std::printf("orb_matcher: sub-pixel refinement on the GPU %ld pairs, on the CPU %ld, off %ld; dropped %.1f%% of "
+                        "%ld matches\n",
+                        sub_pairs[2], sub_pairs[1], sub_pairs[0], 100.0 * double(sub_rejected) / double(std::max(sub_jobs, 1L)),
+                        sub_jobs);
             if (!latencies.empty()) {
                 std::vector<double> v = latencies;
                 std::sort(v.begin(), v.end());
@@ -247,7 +390,8 @@ struct OrbMatcher {
 FW_REGISTER_ALGORITHM_CLASS(OrbMatcher,
     INPUTS(("calib", calib::StereoImuRig, latest), ("params", OrbMatcherParams, latest)),
     OUTPUTS(("match", orb::Match)),
-    ON_SYNC((("left", orb::Features), ("right", orb::Features)), &OrbMatcher::on_pair, USES("calib", "params"),
+    RESOURCES(("gpu", gpu::Device, write)),
+    ON_SYNC((("left", orb::Features), ("right", orb::Features)), &OrbMatcher::on_pair, USES("calib", "params", "gpu"),
             EMITS("match")),
     ON_EOS(&OrbMatcher::on_eos),
     OPTIONS(SYNC_SLOP(1ms)));

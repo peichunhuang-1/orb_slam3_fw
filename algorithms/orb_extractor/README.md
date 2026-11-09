@@ -7,14 +7,20 @@ the CPU. Both backends give the same keypoints; see "GPU vs CPU" below for the l
 |---|---|---|
 | `image` (trigger) | `fw::Image` | mono8 (any `CV_8UC1`), bgr8 / rgb8 / bgra8 / rgba8 |
 | `params` (latest, optional) | `OrbExtractorParams` | `params/orb_extractor_params.hpp`, example `config/orb_extractor.yaml` |
-| `features` | `orb::Features` | keypoints (full resolution, octave = level), N x 32 `CV_8U` descriptors (cv::ORB layout) |
+| `gpu` (resource, write) | `gpu::Device` | the box's GPU (`types/gpu/device.hpp`), shared with the other GPU blocks; required, also with `backend: cpu` |
+| `features` | `orb::Features` | keypoints (full resolution, octave = level), N x 32 `CV_8U` descriptors (cv::ORB layout); with `keep_pyramid` the pyramid without a CPU copy (GPU: `gpu_pyramid`, copied on the GPU; CPU: `pyramid`, shared) |
 
 ```yaml
-blocks:
-  orb: { algorithm: OrbExtractor }
+boxes:
+  main:
+    resources:
+      gpu: { type: gpu/Device }
+    blocks:
+      orb: { algorithm: OrbExtractor }
 edges:
   - cam.left -> orb.image
   - config://orb_extractor.yaml -> orb.params
+  - gpu -> orb.gpu
 ```
 
 `backend`: `auto` (GPU, the CPU if the GPU cannot be used, reported as degraded), `gpu`, `cpu`.

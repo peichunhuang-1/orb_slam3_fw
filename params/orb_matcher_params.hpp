@@ -24,6 +24,7 @@ struct OrbMatcherParams {
     int subpixel_half_window = 5;
     int subpixel_range = 5;
     std::string subpixel_fit = "ssd";
+    std::string subpixel_device = "auto";
     // calibration
     double max_fit_error_px = 0.5;
 };
@@ -48,7 +49,10 @@ FW_PARAMS(OrbMatcherParams,
           FIELD(subpixel_half_window, DEFAULT(5), RANGE(1, 32), DESC("patch half size w: (2w+1)^2 patches")),
           FIELD(subpixel_range, DEFAULT(5), RANGE(1, 32), DESC("search +-L level pixels along the epipolar line")),
           FIELD(subpixel_fit, DEFAULT(std::string("ssd")),
-                DESC("ssd: SSD + parabola (best); sad: SAD + parabola (ORB-SLAM3 pinhole); sad_v: SAD + V-shaped fit"))),
+                DESC("ssd: SSD + parabola (best); sad: SAD + parabola (ORB-SLAM3 pinhole); sad_v: SAD + V-shaped fit")),
+          FIELD(subpixel_device, DEFAULT(std::string("auto")),
+                DESC("auto: on the GPU when both features carry a GPU pyramid (orb_extractor on the GPU), else the CPU; "
+                     "gpu: GPU only; cpu: CPU only"))),
     GROUP("calibration", PERSIST(ask),
           FIELD(max_fit_error_px, DEFAULT(0.5), RANGE(0.0, 100.0),
                 DESC("radtan calibration: KB8 fit p99 error above this (pixels) is reported as degraded"))))

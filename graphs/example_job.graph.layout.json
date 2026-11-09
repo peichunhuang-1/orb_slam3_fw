@@ -6,12 +6,16 @@
       "y": -5
     },
     "config://orb_matcher.yaml": {
-      "x": 596,
-      "y": -172
+      "x": 512,
+      "y": 49
     },
     "euroc_mcap_driver": {
       "x": -37,
       "y": -41
+    },
+    "gpu": {
+      "x": -35,
+      "y": -163
     },
     "orb_extractor_left": {
       "x": 248,
@@ -22,8 +26,8 @@
       "y": 51
     },
     "orb_matcher": {
-      "x": 868,
-      "y": -15
+      "x": 761,
+      "y": -12
     }
   }
 }

@@ -1,0 +1,121 @@
+#version 450
+// Sub-pixel search along the epipolar line on the GPU: SubpixelRefiner::refine (core/subpixel.cpp) for one
+// match per workgroup, on the pyramids orb_extractor left in GPU buffers (packed layout, OrbVk LevelInfo).
+//
+// The left patch (S x S, S = 2w+1) and the right strip (S x (S + 2L)) are sampled bilinearly on grids
+// aligned with each image's local epipolar direction into shared memory; thread k < 2L+1 sums the cost
+// of offset k (patches minus their centre value), thread 0 picks the first minimum and interpolates it.
+// Same arithmetic as the CPU version, but sums and grid positions may round differently (float order).
+layout(local_size_x = 64) in;
+
+const int MAX_W = 7, MAX_L = 8;                    // SubpixelVk::supports
+const int MAX_S = 2 * MAX_W + 1, MAX_SW = MAX_S + 2 * MAX_L;
+
+layout(std430, binding = 0) readonly buffer PyrL { uint pl[]; };   // packed uint8, 4 per uint
+layout(std430, binding = 1) readonly buffer PyrR { uint pr[]; };
+struct Job {
+    vec4 a;    // left.xy, dirL.xy (level pixels)
+    vec4 b;    // right.xy, dirR.xy
+    ivec4 c;   // level
+};
+layout(std430, binding = 2) readonly buffer Jobs {
+    ivec4 geoL[16];   // per level: w, h, stride, goff (w = 0: no such level)
+    ivec4 geoR[16];
+    Job job[];
+};
+layout(std430, binding = 3) writeonly buffer Out { uvec2 res[]; };   // (ok, floatBits(offset))
+layout(push_constant) uniform P { int n; int w; int L; int fit; } pc;   // fit: 0 SAD parabola, 1 SAD V, 2 SSD parabola
+
+shared float patchL[MAX_S * MAX_S];
+shared float strip[MAX_S * MAX_SW];
+shared float cost[2 * MAX_L + 1];
+
+float pixL(int i) { return float((pl[uint(i) >> 2] >> ((uint(i) & 3u) * 8u)) & 255u); }
+float pixR(int i) { return float((pr[uint(i) >> 2] >> ((uint(i) & 3u) * 8u)) & 255u); }
+
+// Bilinear sample, x and y >= 0 (truncation = floor), as sampleGrid
+float bilL(ivec4 g, vec2 p) {
+    int ix = int(p.x), iy = int(p.y);
+    float ax = p.x - float(ix), ay = p.y - float(iy);
+    int i = g.w + iy * g.z + ix;
+    float p0 = pixL(i), p1 = pixL(i + 1), p2 = pixL(i + g.z), p3 = pixL(i + g.z + 1);
+    float top = p0 + ax * (p1 - p0), bot = p2 + ax * (p3 - p2);
+    return top + ay * (bot - top);
+}
+float bilR(ivec4 g, vec2 p) {
+    int ix = int(p.x), iy = int(p.y);
+    float ax = p.x - float(ix), ay = p.y - float(iy);
+    int i = g.w + iy * g.z + ix;
+    float p0 = pixR(i), p1 = pixR(i + 1), p2 = pixR(i + g.z), p3 = pixR(i + g.z + 1);
+    float top = p0 + ax * (p1 - p0), bot = p2 + ax * (p3 - p2);
+    return top + ay * (bot - top);
+}
+
+// Grid origin (sample 0, 0); false if a sample needs a pixel outside the w x h level (sampleGrid's test
+// on the parallelogram's corners)
+bool gridOrigin(vec2 centre, vec2 dir, int rows, int cols, ivec4 g, out vec2 origin) {
+    vec2 nrm = vec2(-dir.y, dir.x);
+    origin = centre - 0.5 * float(cols - 1) * dir - 0.5 * float(rows - 1) * nrm;
+    vec2 ec = float(cols - 1) * dir, er = float(rows - 1) * nrm;
+    vec2 c1 = origin + ec, c2 = origin + er, c3 = origin + ec + er;
+    vec2 lo = min(min(origin, c1), min(c2, c3)), hi = max(max(origin, c1), max(c2, c3));
+    return g.x > 0 && lo.x >= 0.0 && lo.y >= 0.0 && hi.x < float(g.x - 1) && hi.y < float(g.y - 1);
+}
+
+void main() {
+    int m = int(gl_WorkGroupID.x);
+    if (m >= pc.n) return;   // whole workgroup
+    int t = int(gl_LocalInvocationID.x);
+    int w = pc.w, L = pc.L, S = 2 * w + 1, SW = S + 2 * L;
+    Job j = job[m];
+    int lvl = clamp(j.c.x, 0, 15);
+    ivec4 gl = geoL[lvl], gr = geoR[lvl];
+    vec2 dirL = j.a.zw, dirR = j.b.zw;
+    vec2 oL, oR;
+    // uniform over the workgroup: every thread takes the same branch, and all reach the barriers
+    bool ok = j.c.x >= 0 && j.c.x < 16 && gridOrigin(j.a.xy, dirL, S, S, gl, oL) && gridOrigin(j.b.xy, dirR, S, SW, gr, oR);
+    if (ok) {
+        vec2 nL = vec2(-dirL.y, dirL.x), nR = vec2(-dirR.y, dirR.x);
+        for (int k = t; k < S * S; k += 64) {
+            int r = k / S, c = k - r * S;
+            patchL[k] = bilL(gl, oL + float(r) * nL + float(c) * dirL);
+        }
+        for (int k = t; k < S * SW; k += 64) {
+            int r = k / SW, c = k - r * SW;
+            strip[r * MAX_SW + c] = bilR(gr, oR + float(r) * nR + float(c) * dirR);
+        }
+    }
+    barrier();
+    if (ok && t <= 2 * L) {
+        float cL = patchL[w * S + w];
+        float dc = strip[w * MAX_SW + t + w] - cL;
+        float s = 0.0;
+        for (int r = 0; r < S; ++r)
+            for (int c = 0; c < S; ++c) {
+                float d = patchL[r * S + c] - strip[r * MAX_SW + t + c] + dc;
+                s += pc.fit == 2 ? d * d : abs(d);
+            }
+        cost[t] = s;
+    }
+    barrier();
+    if (t != 0) return;
+    uint good = 0u;
+    float offset = 0.0;
+    if (ok) {
+        int best = 0;
+        for (int k = 1; k <= 2 * L; ++k)
+            if (cost[k] < cost[best]) best = k;
+        if (best > 0 && best < 2 * L) {
+            float d1 = cost[best - 1], d2 = cost[best], d3 = cost[best + 1];
+            float den = pc.fit == 1 ? 2.0 * (max(d1, d3) - d2) : 2.0 * (d1 + d3 - 2.0 * d2);
+            if (den > 0.0) {
+                float delta = (d1 - d3) / den;
+                if (delta >= -1.0 && delta <= 1.0) {
+                    good = 1u;
+                    offset = float(best - L) + delta;
+                }
+            }
+        }
+    }
+    res[m] = uvec2(good, floatBitsToUint(offset));
+}

@@ -12,6 +12,7 @@
 
 #include "algorithms/orb_extractor/orb_pattern.hpp"
 #include "orb_vk_log.hpp"
+#include "types/gpu/context.hpp"
 #include "spv_blur.h"
 #include "spv_describe.h"
 #include "spv_fast.h"
@@ -227,7 +228,8 @@ void OrbVk::selectFeatures(const std::vector<OrbCandidate>& cands, const OrbPara
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
-OrbVk::OrbVk(int width, int height, const OrbParams& p, bool allowCpuDevice) : p_(p), w0_(width), h0_(height) {
+OrbVk::OrbVk(int width, int height, const OrbParams& p, bool allowCpuDevice, std::shared_ptr<gpu::Context> ctx)
+    : p_(p), w0_(width), h0_(height) {
     if (width >= 8192 || height >= 8192) throw std::runtime_error("image dimension must be < 8192");
     if (p_.edgeThreshold < 19) throw std::runtime_error("edgeThreshold must be >= 19 (rotated BRIEF patch radius)");
     if (p_.maxFeatures <= 0) p_.maxFeatures = p_.nfeatures;
@@ -286,90 +288,19 @@ OrbVk::OrbVk(int width, int height, const OrbParams& p, bool allowCpuDevice) : p
         }
     }
 
-    // Instance
-    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "orb_vk";
-    app.apiVersion = VK_API_VERSION_1_1;
-    VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-    ici.pApplicationInfo = &app;
-    VK_CHECK(vkCreateInstance(&ici, nullptr, &inst_));
-
-    // Device: prefer integrated, then discrete GPUs; CPU devices (llvmpipe) only if allowed.
-    uint32_t n = 0;
-    vkEnumeratePhysicalDevices(inst_, &n, nullptr);
-    std::vector<VkPhysicalDevice> devs(n);
-    vkEnumeratePhysicalDevices(inst_, &n, devs.data());
-    int bestScore = -1;
-    for (auto d : devs) {
-        VkPhysicalDeviceProperties pr;
-        vkGetPhysicalDeviceProperties(d, &pr);
-        int sc = pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 3
-               : pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   ? 2
-               : pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU            ? (allowCpuDevice ? 0 : -1)
-                                                                          : 1;
-        uint32_t qn = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(d, &qn, nullptr);
-        std::vector<VkQueueFamilyProperties> qf(qn);
-        vkGetPhysicalDeviceQueueFamilyProperties(d, &qn, qf.data());
-        for (uint32_t i = 0; i < qn; ++i) {
-            if ((qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && sc > bestScore) {
-                bestScore = sc;
-                phys_ = d;
-                qfam_ = i;
-                tsSupported_ = qf[i].timestampValidBits > 0;
-                break;
-            }
-        }
-    }
-    if (!phys_) throw std::runtime_error("no Vulkan GPU with a compute queue (use --allow-cpu for llvmpipe)");
-
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(phys_, &props);
-    devName_ = props.deviceName;
-    tsPeriod_ = props.limits.timestampPeriod;
-    tsSupported_ = tsSupported_ && props.limits.timestampComputeAndGraphics;
-    if (props.limits.maxComputeWorkGroupInvocations < 128)
-        throw std::runtime_error("device maxComputeWorkGroupInvocations < 128");
-
-    // Memory: both SoCs have unified memory, so use one host-visible, coherent (ideally also
-    // device-local) memory type for everything and skip staging copies.
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(phys_, &mp);
-    const VkMemoryPropertyFlags want[] = {
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT};
-    bool found = false;
-    for (auto f : want) {
-        for (uint32_t i = 0; i < mp.memoryTypeCount && !found; ++i)
-            if ((mp.memoryTypes[i].propertyFlags & f) == f) {
-                memTypeIdx_ = i;
-                found = true;
-            }
-        if (found) break;
-    }
-    if (!found) throw std::runtime_error("no host-visible coherent memory type");
-
-    float prio = 1.0f;
-    VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-    qci.queueFamilyIndex = qfam_;
-    qci.queueCount = 1;
-    qci.pQueuePriorities = &prio;
-    VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    dci.queueCreateInfoCount = 1;
-    dci.pQueueCreateInfos = &qci;
-    // OrbParams::perfCounters (debug, built with ORB_PERF_COUNTERS): hardware counters per kernel group need
-    // VK_KHR_performance_query
+    // Device: the caller's (in a graph the box's gpu/Device, shared with the other GPU blocks, so they can
+    // read the pyramid), else one of its own; one with VK_KHR_performance_query for the debug counters.
     const bool perfCounters = ORB_PERF_COUNTERS && !p_.perfCounters.empty();
-    const char* perfExt = VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME;
-    VkPhysicalDevicePerformanceQueryFeaturesKHR pqf{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR};
-    if (perfCounters) {
-        pqf.performanceCounterQueryPools = VK_TRUE;
-        dci.pNext = &pqf;
-        dci.enabledExtensionCount = 1;
-        dci.ppEnabledExtensionNames = &perfExt;
-    }
-    VK_CHECK(vkCreateDevice(phys_, &dci, nullptr, &dev_));
-    vkGetDeviceQueue(dev_, qfam_, 0, &queue_);
+    ctx_ = perfCounters ? gpu::Context::create(allowCpuDevice, true)
+                        : ctx ? std::move(ctx) : gpu::Context::create(allowCpuDevice, false);
+    inst_ = ctx_->instance();
+    phys_ = ctx_->physical();
+    dev_ = ctx_->device();
+    qfam_ = ctx_->queueFamily();
+    memTypeIdx_ = ctx_->memoryType();
+    devName_ = ctx_->deviceName();
+    tsPeriod_ = ctx_->timestampPeriod();
+    tsSupported_ = ctx_->timestampsSupported();
 
     // Buffers
     pyr_     = makeBuf(totalBytes_ * p_.numImages);  // one packed pyramid per image
@@ -601,11 +532,10 @@ void OrbVk::setupPerfCounters() {
 #endif  // ORB_PERF_COUNTERS
 
 OrbVk::~OrbVk() {
-    if (!dev_) {
-        if (inst_) vkDestroyInstance(inst_, nullptr);
-        return;
-    }
-    vkDeviceWaitIdle(dev_);
+    if (!dev_) return;
+    // Every submission of this instance was waited for (runGpu, snapshotPyramid): nothing in flight.
+    // The device may be shared (gpu/Device): no vkDeviceWaitIdle, the queue may be another user's now.
+    if (copyFence_) vkDestroyFence(dev_, copyFence_, nullptr);
     if (qpool_) vkDestroyQueryPool(dev_, qpool_, nullptr);
     if (qpoolFine_) vkDestroyQueryPool(dev_, qpoolFine_, nullptr);
 #if ORB_PERF_COUNTERS
@@ -624,15 +554,14 @@ OrbVk::~OrbVk() {
     vkDestroyPipelineLayout(dev_, pl_, nullptr);
     vkDestroyDescriptorSetLayout(dev_, dsl_, nullptr);
     for (Buf* b : {&pyr_, &blur_, &corners_, &score_, &kps_, &counter_, &consts_, &desc_, &tabs_, &sel_, &fcand_, &grid_}) freeBuf(*b);
-    vkDestroyDevice(dev_, nullptr);
-    vkDestroyInstance(inst_, nullptr);
+    // the device and instance belong to ctx_ (released after the members)
 }
 
 OrbVk::Buf OrbVk::makeBuf(VkDeviceSize size) {  // host-mapped storage buffer
     Buf b;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bci.size = size;
-    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;   // pyr_: snapshotPyramid
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VK_CHECK(vkCreateBuffer(dev_, &bci, nullptr, &b.buf));
     VkMemoryRequirements req;
@@ -938,6 +867,53 @@ const uint8_t* OrbVk::pyramidLevel(int l, int image) const {
     return static_cast<const uint8_t*>(pyr_.map) + (size_t)image * totalBytes_ + levels_[l].goff;
 }
 
+std::shared_ptr<const gpu::Pyramid> OrbVk::snapshotPyramid(int image) {
+    if (image < 0 || image >= p_.numImages) throw std::runtime_error("snapshotPyramid: image out of range");
+    if (!pool_) {
+        pool_ = std::make_shared<gpu::PyramidPool>(ctx_, (VkDeviceSize)totalBytes_);
+        VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cbai.commandPool = cpool_;
+        cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VK_CHECK(vkAllocateCommandBuffers(dev_, &cbai, &copyCmd_));
+        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VK_CHECK(vkCreateFence(dev_, &fci, nullptr, &copyFence_));
+    }
+    std::shared_ptr<gpu::Pyramid> out = pool_->acquire();
+    out->levels.clear();
+    for (const LevelInfo& L : levels_) out->levels.push_back({L.w, L.h, L.stride, L.goff, L.scale});
+
+    // The destination changes from frame to frame: record the copy each time (microseconds).
+    VK_CHECK(vkResetCommandBuffer(copyCmd_, 0));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(copyCmd_, &bi));
+    // the last run's shader writes (an earlier submission on the queue) before the transfer reads
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(copyCmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    VkBufferCopy region{(VkDeviceSize)image * totalBytes_, 0, (VkDeviceSize)totalBytes_};
+    vkCmdCopyBuffer(copyCmd_, pyr_.buf, out->buffer, 1, &region);
+    // for the readers: shaders on the same queue (they add their own barrier too) and the host
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(copyCmd_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    VK_CHECK(vkEndCommandBuffer(copyCmd_));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &copyCmd_;
+    VK_CHECK(ctx_->submit(si, copyFence_));
+    VK_CHECK(vkWaitForFences(dev_, 1, &copyFence_, VK_TRUE, UINT64_MAX));
+    VK_CHECK(vkResetFences(dev_, 1, &copyFence_));
+    return out;
+}
+
+size_t OrbVk::pyramidBuffers() const { return pool_ ? pool_->allocated() : 0; }
+
 void OrbVk::runGpu(const uint8_t* gray, int stride) {
     if (dirty_) {  // push constants are baked into the command buffer
         VK_CHECK(vkResetCommandBuffer(cmd_, 0));
@@ -952,7 +928,7 @@ void OrbVk::runGpu(const uint8_t* gray, int stride) {
     const VkCommandBuffer cbs[2] = {perfResetCmd_, cmd_};
     si.commandBufferCount = perfPool_ ? 2 : 1;
     si.pCommandBuffers = perfPool_ ? cbs : &cmd_;
-    VK_CHECK(vkQueueSubmit(queue_, 1, &si, fence_));
+    VK_CHECK(ctx_->submit(si, fence_));
     VK_CHECK(vkWaitForFences(dev_, 1, &fence_, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(dev_, 1, &fence_));
 
