@@ -1,0 +1,52 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// For each selected keypoint (selIdx):
+//   1. orientation by intensity centroid over a radius-15 circular patch (unblurred level)
+//   2. 256-bit rotated BRIEF descriptor from the blurred level
+// Results are stored at the keypoint's index in kps[] / desc[].
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint ns = selCount;
+    for (uint s = gl_GlobalInvocationID.x; s < ns; s += gridStride()) {
+        uint i = selIdx[s];
+        KP k = kps[i];
+        ivec4 L = consts[LEVEL_BASE + k.level];
+        int w = L.w;                         // row stride in bytes
+        int base = L.z + k.py * w + k.px;
+
+        int m01 = 0, m10 = 0;
+        for (int u = -HALF_PATCH; u <= HALF_PATCH; ++u) m10 += u * int(ldPyr(base + u));
+        for (int v = 1; v <= HALF_PATCH; ++v) {
+            int d = umaxAt(v), vs = 0;
+            for (int u = -d; u <= d; ++u) {
+                int vp = int(ldPyr(base + u + v * w));
+                int vm = int(ldPyr(base + u - v * w));
+                vs  += vp - vm;
+                m10 += u * (vp + vm);
+            }
+            m01 += v * vs;
+        }
+        float ang = (m01 == 0 && m10 == 0) ? 0.0 : atan(float(m01), float(m10));
+        kps[i].angle = ang;
+
+        float ca = cos(ang), sa = sin(ang);
+        for (int wd = 0; wd < 8; ++wd) {
+            uint bits = 0u;
+            for (int j = 0; j < 32; ++j) {
+                ivec4 pt = consts[wd * 32 + j];
+                // `precise` forbids FMA contraction so results match the CPU reference
+                precise float fx0 = float(pt.x) * ca - float(pt.y) * sa;
+                precise float fy0 = float(pt.x) * sa + float(pt.y) * ca;
+                precise float fx1 = float(pt.z) * ca - float(pt.w) * sa;
+                precise float fy1 = float(pt.z) * sa + float(pt.w) * ca;
+                int x0 = int(roundEven(fx0)), y0 = int(roundEven(fy0));
+                int x1 = int(roundEven(fx1)), y1 = int(roundEven(fy1));
+                if (ldBlur(base + y0 * w + x0) < ldBlur(base + y1 * w + x1)) bits |= 1u << j;
+            }
+            desc[i * 8u + uint(wd)] = bits;
+        }
+    }
+}

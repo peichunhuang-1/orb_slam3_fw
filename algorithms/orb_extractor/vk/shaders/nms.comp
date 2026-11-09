@@ -1,0 +1,46 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// 3x3 non-maximum suppression on the Harris score map, run only over the FAST corner list.
+// Survivors are appended to kps[] with an atomic (with distribute also counted per grid cell). The score map is zero everywhere except at
+// this frame's corners (post_nms.comp resets those entries afterwards).
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint n = min(cornerCount, uint(pc.maxCorners));
+    for (uint i = gl_GlobalInvocationID.x; i < n; i += gridStride()) {
+        uint e = corners[i];
+        int x = int(e & 0x1FFFu), y = int((e >> 13) & 0x1FFFu), l = int(e >> 26);
+        ivec4 L = consts[LEVEL_BASE + l];
+        int stride = L.w;
+        int idx = L.z + y * stride + x;
+        float s = score[idx];
+        if (s <= 0.0) continue;
+
+        bool keep = true;
+        for (int dy = -1; dy <= 1 && keep; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                float nb = score[idx + dy * stride + dx];
+                bool before = (dy < 0) || (dy == 0 && dx < 0);   // ties: keep the earlier pixel in scan order
+                if (before ? (nb >= s) : (nb > s)) { keep = false; break; }
+            }
+        if (!keep) continue;
+
+        uint k = atomicAdd(kpCount, 1u);
+        if (k < uint(pc.maxKp)) {
+            KP kp;
+            kp.response = s; kp.angle = 0.0;
+            kp.level = l; kp.px = x; kp.py = y; kp.selected = 0;
+            kp.cell = 0; kp.rank = 0;
+            if (pc.distribute != 0) {   // grid cell and per-cell count (distribute, see grid_scan.comp)
+                kp.cell = cellOf(x, y, l);
+                atomicAdd(grid[kp.cell], 1u);
+            }
+            kps[k] = kp;
+        } else {
+            atomicMax(kpOverflow, 1u);
+        }
+    }
+}

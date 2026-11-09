@@ -1,0 +1,16 @@
+{
+  "name": "orb_slam3_fw",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "fw",
+  "runArgs": [
+    // Add this robot's devices here, for example "--device=/dev/ttyUSB0"
+    "--network=host",
+    "--ipc=host",
+    "--cap-add=SYS_NICE",
+    "--ulimit=rtprio=99",
+    // GPU (VideoCore VII render node) for the orb_extractor Vulkan backend; gpu_access.sh opens it up
+    "--device=/dev/dri"
+  ],
+  "postStartCommand": "bash .devcontainer/gpu_access.sh",
+  "customizations": { "vscode": { "extensions": ["/usr/local/share/fw/fw-editor.vsix"] } }
+}

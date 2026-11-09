@@ -1,0 +1,19 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Distribute, step 2: copy each keypoint's response and position into lists grouped by cell
+// (order within a cell is arbitrary; grid_rank.comp does not depend on it). grid_rank.comp
+// then reads contiguous memory instead of following indices into kps[].
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint n = min(kpCount, uint(pc.maxKp));
+    uint C = uint(pc.gridCells), M = uint(pc.maxKp);
+    for (uint i = gl_GlobalInvocationID.x; i < n; i += gridStride()) {
+        uint c = uint(kps[i].cell);
+        uint pos = grid[C + c] + atomicAdd(grid[2u * C + c], 1u);
+        grid[5u * C + pos] = floatBitsToUint(kps[i].response);
+        grid[5u * C + M + pos] = (uint(kps[i].py) << 16) | uint(kps[i].px);   // orders as (y, x)
+    }
+}

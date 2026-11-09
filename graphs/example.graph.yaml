@@ -1,0 +1,10 @@
+# Runs until stopped (Ctrl-C):  fw launch graphs/example.graph.yaml
+version: 1
+ros_distro: humble
+boxes:
+  main:
+    blocks:
+      pulse: { driver: example_pulse }
+      print: { algorithm: ExamplePrint }
+edges:
+  - pulse.n -> print.n

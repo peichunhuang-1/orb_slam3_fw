@@ -1,0 +1,60 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16, local_size_y = 8) in;
+#include "common.glsl"
+
+// Bilinear downscale from the previous level to this one (pixel-centre aligned, like
+// cv::resize INTER_LINEAR). Weights are 11-bit fixed point so every GPU and the CPU
+// reference produce bit-identical results. Each thread writes 4 x 2 pixels (one uint per row):
+// on V3D the cost follows the number of threads more than their work.
+// The grid covers whole padded rows: the padding words before pixel 0 and after pixel w-1
+// get the edge pixels (the table clamps the columns), which blur.comp relies on.
+// gl_WorkGroupID.z selects the image when several images are batched.
+//
+// The source pixels of 4 outputs lie within 12 bytes of each source row, read as three
+// aligned words (instead of 16 byte loads). x0 + 1 needs no clamp: past the last pixel the
+// source row padding repeats it. Levels whose window does not fit use resize_any.comp.
+
+// Bytes k and k + 1 (k = 0 .. 10) of the 12-byte window w0 w1 w2, in bits 0-7 and 8-15.
+uint pair(uint w0, uint w1, uint w2, int k) {
+    uint lo = k < 4 ? w0 : (k < 8 ? w1 : w2);
+    uint hi = k < 4 ? w1 : w2;
+    int sh = (k & 3) * 8;
+    return sh == 0 ? lo : (lo >> sh) | (hi << (32 - sh));
+}
+
+// One output pixel from the windows of source rows y0 (a) and y1 (b).
+uint px(uint a0, uint a1, uint a2, uint b0, uint b1, uint b2, uint tx, int xs, int fy) {
+    int j = int(tx & 0xFFFFu) - xs, fx = int(tx >> 16);
+    uint pa = pair(a0, a1, a2, j), pb = pair(b0, b1, b2, j);
+    uint top = (pa & 255u) * uint(2048 - fx) + ((pa >> 8) & 255u) * uint(fx);
+    uint bot = (pb & 255u) * uint(2048 - fx) + ((pb >> 8) & 255u) * uint(fx);
+    return (top * uint(2048 - fy) + bot * uint(fy) + (1u << 21)) >> 22;
+}
+
+void main() {
+    int wd = int(gl_GlobalInvocationID.x) - 1;   // word within the row; -1 = left padding
+    int yb = int(gl_GlobalInvocationID.y) * 2;
+    if (wd >= pc.stride / 4 - 1 || yb >= pc.h) return;
+
+    int ib = int(gl_WorkGroupID.z) * pc.imgStride;
+    int t = pc.xTab + (wd + 1) * 4;              // table entries of columns 4 wd .. 4 wd + 3
+    uint t0 = tabs[t], t1 = tabs[t + 1], t2 = tabs[t + 2], t3 = tabs[t + 3];
+    int xs = int(t0 & 0xFFFFu) & ~3;             // window start (source column, word aligned)
+    int src = pc.srcOff + ib + xs, dst = (pc.off + ib) / 4 + wd;
+
+    {
+        uint ty = tabs[pc.yTab + yb + 0];
+        int y0 = int(ty & 0xFFFFu), fy = int(ty >> 16), y1 = min(y0 + 1, pc.srcH - 1);
+        int i0 = (src + y0 * pc.srcStride) >> 2, i1 = (src + y1 * pc.srcStride) >> 2;
+        uint a0 = pyr[i0], a1 = pyr[i0 + 1], a2 = pyr[i0 + 2], b0 = pyr[i1], b1 = pyr[i1 + 1], b2 = pyr[i1 + 2];
+        pyr[dst + (yb + 0) * (pc.stride / 4)] = (px(a0, a1, a2, b0, b1, b2, t0, xs, fy) << 0u) | (px(a0, a1, a2, b0, b1, b2, t1, xs, fy) << 8u) | (px(a0, a1, a2, b0, b1, b2, t2, xs, fy) << 16u) | (px(a0, a1, a2, b0, b1, b2, t3, xs, fy) << 24u);
+    }
+    if (yb + 1 < pc.h) {
+        uint ty = tabs[pc.yTab + yb + 1];
+        int y0 = int(ty & 0xFFFFu), fy = int(ty >> 16), y1 = min(y0 + 1, pc.srcH - 1);
+        int i0 = (src + y0 * pc.srcStride) >> 2, i1 = (src + y1 * pc.srcStride) >> 2;
+        uint a0 = pyr[i0], a1 = pyr[i0 + 1], a2 = pyr[i0 + 2], b0 = pyr[i1], b1 = pyr[i1 + 1], b2 = pyr[i1 + 2];
+        pyr[dst + (yb + 1) * (pc.stride / 4)] = (px(a0, a1, a2, b0, b1, b2, t0, xs, fy) << 0u) | (px(a0, a1, a2, b0, b1, b2, t1, xs, fy) << 8u) | (px(a0, a1, a2, b0, b1, b2, t2, xs, fy) << 16u) | (px(a0, a1, a2, b0, b1, b2, t3, xs, fy) << 24u);
+    }
+}

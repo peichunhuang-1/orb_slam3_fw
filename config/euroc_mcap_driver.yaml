@@ -1,0 +1,4 @@
+# euroc_mcap_driver block (params/euroc_mcap_driver_params.hpp)
+file: bags://V1_02_medium.mcap
+rate: 1.0         # 0: as fast as possible
+lossless: true    # evaluation: no frame is dropped

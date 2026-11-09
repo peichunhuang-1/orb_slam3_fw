@@ -1,0 +1,30 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16) in;
+#include "common.glsl"
+
+// One thread per level: walk the histograms from the strongest bin down until the level's
+// quota is reached. Every keypoint in a stronger fine bin is kept; the boundary fine bin is
+// resolved exactly in select.comp. With distribute the histograms hold only the boundary rank,
+// and the keypoints of lower ranks are already counted in rthr[l].y.
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    int l = int(gl_LocalInvocationID.x);
+    if (l >= pc.nlevels) return;
+    uint quota = uint(consts[QUOTA_BASE + l].x);
+    if (pc.distribute != 0) quota -= uint(rthr[l].y);
+    uint above = 0u;
+    int cb = 63;
+    for (; cb >= 0; --cb) {                       // coarse bin containing the boundary
+        uint c = histCoarse[l * 64 + cb];
+        if (above + c >= quota) break;
+        above += c;
+    }
+    if (cb < 0) { thr[l] = ivec2(-1, 0); return; } // fewer keypoints than the quota: keep all
+    for (int fb = cb * 32 + 31; fb >= cb * 32; --fb) {
+        uint c = histFine[l * 2048 + fb];
+        if (above + c >= quota) { thr[l] = ivec2(fb, int(above)); return; }
+        above += c;
+    }
+    thr[l] = ivec2(-1, 0);                        // not reached (coarse and fine counts agree)
+}

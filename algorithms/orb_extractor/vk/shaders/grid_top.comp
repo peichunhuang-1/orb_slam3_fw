@@ -1,0 +1,45 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Distribute, step 3a: the best MAX_RANK keypoints of every cell (response descending, then y,
+// then x, as kpBefore), from the contiguous per-cell lists of grid_scatter.comp, into the cell's
+// top list (grid layout in common.glsl). One thread per cell, one pass over its list with a small
+// insertion-sorted array: most keypoints lose against the current last entry at once, so the cost
+// is about one comparison per keypoint. grid_rank.comp then ranks each keypoint against its
+// cell's list. (Ranking every keypoint against the whole cell was O(n^2) per cell and dominated
+// dense textures: 11 ms of a 65 ms stereo frame set on foliage.)
+bool better(uint r, uint p, uint r2, uint p2) { return r > r2 || (r == r2 && p < p2); }
+
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint C = uint(pc.gridCells), M = uint(pc.maxKp);
+    uint top = TOP_BASE(C, M);
+    for (uint c = gl_GlobalInvocationID.x; c < C; c += gridStride()) {
+        uint b = 5u * C + grid[C + c], e = b + grid[c];
+        uint tr[MAX_RANK], tp[MAX_RANK];
+        int nt = 0;
+        for (uint k = b; k < e; ++k) {
+            uint r = grid[k], p = grid[k + M];   // responses are positive: bits order like values
+            int j;
+            if (nt < MAX_RANK) {
+                j = nt++;
+            } else {
+                if (!better(r, p, tr[MAX_RANK - 1], tp[MAX_RANK - 1])) continue;
+                j = MAX_RANK - 1;
+            }
+            while (j > 0 && better(r, p, tr[j - 1], tp[j - 1])) {
+                tr[j] = tr[j - 1];
+                tp[j] = tp[j - 1];
+                --j;
+            }
+            tr[j] = r;
+            tp[j] = p;
+        }
+        for (int j = 0; j < nt; ++j) {
+            grid[top + c * uint(MAX_RANK) + uint(j)] = tr[j];
+            grid[top + C * uint(MAX_RANK) + c * uint(MAX_RANK) + uint(j)] = tp[j];
+        }
+    }
+}

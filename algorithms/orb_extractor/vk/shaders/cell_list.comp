@@ -1,0 +1,13 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Per-cell FAST thresholds: list the grid cells without a corner of FAST pass 1 (not marked by
+// fast_mark.comp), for fast_cells.comp.
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint C = uint(pc.gridCells);
+    for (uint c = gl_GlobalInvocationID.x; c < C; c += gridStride())
+        if (grid[3u * C + c] == 0u) grid[4u * C + atomicAdd(weakCellCount, 1u)] = c;
+}

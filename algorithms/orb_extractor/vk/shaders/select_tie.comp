@@ -1,0 +1,29 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Per-level selection, part 2: rank each boundary-bin keypoint against the other boundary-bin
+// keypoints of its level, in the CPU order (response descending, then y, then x), and keep the
+// best (quota - kept so far). The tie list is short, so this is cheap. With distribute the tie
+// list holds only keypoints of the level's boundary rank.
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint nt = tieCount, base = uint(pc.selCap);
+    for (uint s = gl_GlobalInvocationID.x; s < nt; s += gridStride()) {
+        uint i = selIdx[base + s];
+        int l = kps[i].level, x = kps[i].px, y = kps[i].py;
+        float r = kps[i].response;
+        uint need = uint(consts[QUOTA_BASE + l].x) - uint(thr[l].y);
+        if (pc.distribute != 0) need -= uint(rthr[l].y);
+        uint rank = 0u;
+        for (uint t = 0u; t < nt && rank < need; ++t) {
+            uint j = selIdx[base + t];
+            if (j != i && kps[j].level == l && kpBefore(j, r, x, y)) ++rank;
+        }
+        if (rank < need) {
+            kps[i].selected = 1;
+            selIdx[atomicAdd(selCount, 1u)] = i;
+        }
+    }
+}

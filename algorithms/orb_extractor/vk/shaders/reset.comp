@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Start of frame: zero the counters and the selection histograms (and with a grid the rank
+// histograms, the per-cell counters and the strong-corner flags). Done in a compute shader
+// instead of vkCmdFillBuffer, which v3dv runs on a separate unit (TFU) as an extra job.
+void main() {
+    uint t = gl_GlobalInvocationID.x, n = gridStride();
+    if (t == 0u) {
+        kpCount = 0u; kpOverflow = 0u; cornerCount = 0u; cornerOverflow = 0u; selCount = 0u; tieCount = 0u; fastCandCount = 0u;
+        fastCand2Count = 0u; strongCornerCount = 0u; weakCellCount = 0u;
+    }
+    for (uint i = t; i < 16u * 64u; i += n) histCoarse[i] = 0u;
+    for (uint i = t; i < 16u * 2048u; i += n) histFine[i] = 0u;
+    if (pc.gridCells > 0) {
+        uint C = uint(pc.gridCells);
+        for (uint i = t; i < 16u * 64u; i += n) rankHist[i] = 0u;
+        for (uint i = t; i < C; i += n) { grid[i] = 0u; grid[2u * C + i] = 0u; grid[3u * C + i] = 0u; }
+    }
+}

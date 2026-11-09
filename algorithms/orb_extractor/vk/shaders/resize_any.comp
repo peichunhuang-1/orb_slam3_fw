@@ -1,0 +1,31 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16, local_size_y = 8) in;
+#include "common.glsl"
+
+// Bilinear downscale, general version of resize.comp for levels whose scale ratio is too
+// large for its 3-word source window (ratio above about 2.3, e.g. a large extraLevelScale).
+// Same arithmetic and table; every source pixel is a separate byte load.
+void main() {
+    int wd = int(gl_GlobalInvocationID.x) - 1;   // word within the row; -1 = left padding
+    int y  = int(gl_GlobalInvocationID.y);
+    if (wd >= pc.stride / 4 - 1 || y >= pc.h) return;
+
+    int ib = int(gl_WorkGroupID.z) * pc.imgStride;
+    uint ty = tabs[pc.yTab + y];
+    int y0 = int(ty & 0xFFFFu), fy = int(ty >> 16);
+    int y1 = min(y0 + 1, pc.srcH - 1);
+    int r0 = pc.srcOff + ib + y0 * pc.srcStride, r1 = pc.srcOff + ib + y1 * pc.srcStride;
+
+    uint word = 0u;
+    for (int k = 0; k < 4; ++k) {
+        uint tx = tabs[pc.xTab + (wd + 1) * 4 + k];   // column x4 + k, clamped to the row
+        int x0 = int(tx & 0xFFFFu), fx = int(tx >> 16);
+        int x1 = min(x0 + 1, pc.srcW - 1);
+        uint top = ldPyr(r0 + x0) * uint(2048 - fx) + ldPyr(r0 + x1) * uint(fx);
+        uint bot = ldPyr(r1 + x0) * uint(2048 - fx) + ldPyr(r1 + x1) * uint(fx);
+        uint v   = top * uint(2048 - fy) + bot * uint(fy);
+        word |= ((v + (1u << 21)) >> 22) << (8 * k);
+    }
+    pyr[(pc.off + ib + y * pc.stride) / 4 + wd] = word;
+}

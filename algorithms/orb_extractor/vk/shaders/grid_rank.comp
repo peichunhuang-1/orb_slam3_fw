@@ -1,0 +1,31 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Distribute, step 3b: rank of every keypoint within its cell (0 = strongest; response
+// descending, then y, then x, as kpBefore), capped at MAX_RANK, and the per-level histogram of
+// the ranks. The cell's best MAX_RANK keypoints are in its top list (grid_top.comp): a keypoint
+// found there at position j has rank j, every other one rank MAX_RANK (at least MAX_RANK
+// keypoints of the cell rank before it). Positions are unique within a level, so (response,
+// position) identifies the keypoint.
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint n = min(kpCount, uint(pc.maxKp));
+    uint C = uint(pc.gridCells), M = uint(pc.maxKp);
+    uint top = TOP_BASE(C, M);
+    for (uint i = gl_GlobalInvocationID.x; i < n; i += gridStride()) {
+        uint c = uint(kps[i].cell);
+        uint r = floatBitsToUint(kps[i].response);
+        uint yx = (uint(kps[i].py) << 16) | uint(kps[i].px);
+        uint nt = min(grid[c], uint(MAX_RANK));
+        int rank = MAX_RANK;
+        for (uint j = 0u; j < nt; ++j)
+            if (grid[top + c * uint(MAX_RANK) + j] == r && grid[top + C * uint(MAX_RANK) + c * uint(MAX_RANK) + j] == yx) {
+                rank = int(j);
+                break;
+            }
+        kps[i].rank = rank;
+        atomicAdd(rankHist[uint(kps[i].level) * 64u + uint(rank)], 1u);
+    }
+}

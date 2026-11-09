@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Distribute, step 1 (nms.comp has counted the keypoints per cell): exclusive prefix sum of the
+// per-cell counts (one workgroup). Each thread sums a contiguous chunk of cells, the 64 chunk
+// sums are scanned, then each thread writes the start index of every cell in its chunk.
+shared uint chunkSum[64];
+
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint t = gl_LocalInvocationID.x;
+    uint C = uint(pc.gridCells);
+    uint per = (C + 63u) / 64u;
+    uint b = min(t * per, C), e = min(b + per, C);
+    uint s = 0u;
+    for (uint c = b; c < e; ++c) s += grid[c];
+    chunkSum[t] = s;
+    barrier();
+    if (t == 0u) {
+        uint run = 0u;
+        for (uint k = 0u; k < 64u; ++k) { uint v = chunkSum[k]; chunkSum[k] = run; run += v; }
+    }
+    barrier();
+    uint run = chunkSum[t];
+    for (uint c = b; c < e; ++c) { grid[C + c] = run; run += grid[c]; }
+}

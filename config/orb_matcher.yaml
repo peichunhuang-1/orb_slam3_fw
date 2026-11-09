@@ -1,0 +1,20 @@
+# orb_matcher block (params/orb_matcher_params.hpp). Defaults measured on EuRoC (algorithms/orb_matcher/README.md).
+# matching
+th_dist: 75
+ratio: 0.7
+octave_window: 1
+sigma_px: 1.0
+gate_k: 3.0
+min_depth: 0.15
+max_depth: 0.0          # 0: unlimited
+min_epipole_deg: 5.0
+# triangulation
+min_parallax_deg: 1.146
+chi2: 5.991
+# sub-pixel refinement (needs orb_extractor keep_pyramid: true)
+subpixel: true
+subpixel_half_window: 5
+subpixel_range: 5
+subpixel_fit: ssd       # ssd | sad | sad_v
+# calibration
+max_fit_error_px: 0.5

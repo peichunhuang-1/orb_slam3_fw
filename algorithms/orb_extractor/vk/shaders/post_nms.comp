@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// After NMS:
+//   1. histogram the keypoint responses per level (coarse and fine bins) for the selection;
+//      with distribute only the keypoints of the level's boundary rank (rank_thresh.comp)
+//   2. reset the score map at this frame's corners, so the whole map is zero again for the
+//      next frame without clearing the full buffer
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint n = min(kpCount, uint(pc.maxKp));
+    for (uint i = gl_GlobalInvocationID.x; i < n; i += gridStride()) {
+        float r = kps[i].response;
+        uint l = uint(kps[i].level);
+        if (pc.distribute != 0 && kps[i].rank != rthr[l].x) continue;
+        atomicAdd(histCoarse[l * 64u + coarseBin(r)], 1u);
+        atomicAdd(histFine[l * 2048u + fineBin(r)], 1u);
+    }
+    uint nc = min(cornerCount, uint(pc.maxCorners));
+    for (uint i = gl_GlobalInvocationID.x; i < nc; i += gridStride()) {
+        uint e = corners[i];
+        int x = int(e & 0x1FFFu), y = int((e >> 13) & 0x1FFFu), l = int(e >> 26);
+        ivec4 L = consts[LEVEL_BASE + l];
+        score[L.z + y * L.w + x] = 0.0;
+    }
+}

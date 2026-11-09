@@ -1,0 +1,9 @@
+build/
+install/
+log/
+# this machine's pending parameters, history and run output
+.fw/
+# written by fw launch from the graphs
+graphs/*.launch.py
+graphs/__pycache__/
+*.mcap

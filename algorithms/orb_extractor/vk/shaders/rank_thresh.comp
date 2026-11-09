@@ -1,0 +1,21 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16) in;
+#include "common.glsl"
+
+// Distribute, step 4: one thread per level. Ranks below the boundary rank R are kept; among the
+// keypoints of rank R, the strongest (quota - kept) are chosen by the usual response selection
+// (post_nms.comp histograms only rank R, thresh.comp / select*.comp subtract rthr[l].y).
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    int l = int(gl_LocalInvocationID.x);
+    if (l >= pc.nlevels) return;
+    uint quota = uint(consts[QUOTA_BASE + l].x);
+    uint above = 0u;
+    for (int r = 0; r <= MAX_RANK; ++r) {
+        uint c = rankHist[l * 64 + r];
+        if (above + c >= quota) { rthr[l] = ivec2(r, int(above)); return; }
+        above += c;
+    }
+    rthr[l] = ivec2(-1, 0);   // fewer keypoints than the quota: keep all
+}

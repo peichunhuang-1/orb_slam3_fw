@@ -1,0 +1,70 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+// Per-cell FAST thresholds, pass 2 pre-test: the same compass test as fast.comp at pc.fastLo,
+// but only over the cells listed by cell_list.comp (one workgroup per cell, grid-stride over
+// cells). Passing blocks go to fastCand[maxCorners ..] for fast_full.comp (pc.fastPass2).
+// A per-pixel dispatch over the whole pyramid cost ~2.7 ms at 512x512 even when every thread
+// exited at once (V3D cost follows the number of threads); this one launches 64 x 64 threads.
+
+// Packed compass test for 2 pixels (16-bit lanes): bit 15 / bit 31 set if the pixel passes.
+uint compass2(uint c, uint b, uint r, uint t, uint l, uint t1) {
+    const uint HI = 0x80008000u;
+    uint ct = c + t1;
+    uint bb = ((b | HI) - ct) & HI, br = ((r | HI) - ct) & HI;   // brighter than c + thr
+    uint bt = ((t | HI) - ct) & HI, bl = ((l | HI) - ct) & HI;
+    uint ch = c | HI;
+    uint db = (ch - (b + t1)) & HI, dr = (ch - (r + t1)) & HI;    // darker than c - thr
+    uint dt = (ch - (t + t1)) & HI, dl = (ch - (l + t1)) & HI;
+    // compass order bottom, right, top, left: a 9-arc covers two adjacent ones
+    return (bb & br) | (br & bt) | (bt & bl) | (bl & bb) | (db & dr) | (dr & dt) | (dt & dl) | (dl & db);
+}
+
+void main() {
+    if (aborted()) return;   // abnormal frame (common.glsl)
+    uint C = uint(pc.gridCells), nCells = weakCellCount;
+    uint t = gl_LocalInvocationID.x;
+    const uint M = 0x00FF00FFu;
+    uint t1 = uint(pc.fastLo + 1) * 0x00010001u;
+    for (uint k = gl_WorkGroupID.x; k < nCells; k += gl_NumWorkGroups.x) {
+        // cell -> level and cell coordinates (a few divisions per cell, not per pixel)
+        int c = int(grid[4u * C + k]);
+        int l = 0;
+        for (int i = 1; i < pc.nlevels; ++i)
+            if (c >= consts[CELL_BASE + i].w) l = i;
+        ivec4 G = consts[CELL_BASE + l], Lv = consts[LEVEL_BASE + l];
+        int W = Lv.x, H = Lv.y, OFF = Lv.z, STR = Lv.w;
+        int ci = c - G.w, cy = ci / G.y, cx = ci - cy * G.y;
+        int cell = consts[CELL2_BASE + l].x;
+        int x0 = pc.border + cx * cell, y0 = pc.border + cy * cell;
+        int x1 = cx == G.y - 1 ? W - pc.border : x0 + cell;   // last column / row: up to the border
+        int y1 = cy == G.z - 1 ? H - pc.border : y0 + cell;
+        // 4-pixel blocks aligned to words; threads split as nbx columns x (64 / nbx) rows
+        int bx0 = x0 & ~3, nbx = (x1 - bx0 + 3) >> 2;
+        int rows = max(1, 64 / nbx);
+        int tx = int(t) % nbx, ty = int(t) / nbx;
+        if (ty >= rows) continue;
+        for (int y = y0 + ty; y < y1; y += rows) {
+            for (int bx = tx; bx < nbx; bx += 64) {
+                int x4 = bx0 + bx * 4;
+                int ws = STR >> 2, wy = (OFF + y * STR + x4) >> 2;
+                uint w3_0 = pyr[wy - 1], w3_1 = pyr[wy], w3_2 = pyr[wy + 1];
+                uint w0_1 = pyr[wy - 3 * ws], w6_1 = pyr[wy + 3 * ws];
+                uint rgt = (w3_1 >> 24) | (w3_2 << 8);
+                uint lft = (w3_0 >> 8) | (w3_1 << 24);
+                uint pe = compass2(w3_1 & M, w6_1 & M, rgt & M, w0_1 & M, lft & M, t1);
+                uint po = compass2((w3_1 >> 8) & M, (w6_1 >> 8) & M, (rgt >> 8) & M, (w0_1 >> 8) & M, (lft >> 8) & M, t1);
+                uint pass = ((pe >> 15) & 1u) | ((po >> 14) & 2u) | ((pe >> 29) & 4u) | ((po >> 28) & 8u);
+                int lo = x0 - x4, hi = x1 - x4;   // pixels j in [lo, hi) belong to this cell
+                pass &= (lo <= 0 ? 15u : (15u << lo) & 15u) & (hi >= 4 ? 15u : (1u << hi) - 1u);
+                if (pass == 0u) continue;
+                uint i = atomicAdd(fastCand2Count, 1u);
+                if (i < uint(pc.maxCorners))
+                    fastCand[uint(pc.maxCorners) + i] = uint(x4 >> 2) | (uint(y) << 11) | (uint(l) << 24) | (pass << 28);
+                else atomicMax(cornerOverflow, 1u);
+            }
+        }
+    }
+}

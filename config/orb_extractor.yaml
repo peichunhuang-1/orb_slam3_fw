@@ -1,0 +1,13 @@
+# orb_extractor block (params/orb_extractor_params.hpp). Values as ORB-SLAM3's EuRoC settings.
+backend: auto     # auto | gpu | cpu
+nfeatures: 1200
+scale_factor: 1.2
+nlevels: 8
+ini_th_fast: 20
+min_th_fast: 7
+per_cell_threshold: true
+distribute: true
+cells_per_feature: 1.0
+abort_corner_fraction: 0.0
+edge_threshold: 19
+keep_pyramid: true   # orb_matcher's sub-pixel refinement reads it
