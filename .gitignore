@@ -6,6 +6,10 @@ log/
 # written by fw launch from the graphs
 graphs/*.launch.py
 graphs/__pycache__/
+# what the graphs write when they run (recordings: out/runs/<session>/)
+out/
+state/
 *.mcap
+.DS_Store
 # ORB vocabulary: the compressed file is in git, the extracted one is not
 data/orb_vocabulary/ORBvoc.bin
