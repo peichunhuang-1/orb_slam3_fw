@@ -16,6 +16,8 @@
 //   params      : OrbMatcherParams (latest; optional, every field has a default). A change rebuilds the
 //                 matcher from the next pair on.
 //   match       : orb::Match, stamp of the left features
+//   stereo      : orb::StereoFrame, stamp of the left features: both views' keypoints, descriptors and bearings
+//                 with the matches, for tracking (through imu_preintegration for stereo-inertial)
 //
 // At the end of the data it prints a summary: pairs, matches per pair, matching time, output rate (wall
 // clock) and the latency from the earlier extraction start of a pair to its match (orb::MatchStats::latency_ms).
@@ -39,6 +41,7 @@
 #include "types/gpu/device.hpp"
 #include "types/orb/features.hpp"
 #include "types/orb/match.hpp"
+#include "types/orb/stereo_frame.hpp"
 
 namespace {
 
@@ -151,7 +154,7 @@ struct OrbMatcher {
 
     void on_pair(fw::Context& ctx, const orb::Features& left, const orb::Features& right,
                  Msg<calib::StereoImuRig> cal, const OrbMatcherParams& params, fw::Write<::gpu::Device> device_res,
-                 orb::Match& out) {
+                 orb::Match& out, orb::StereoFrame& frame) {
         update_calib(ctx, cal, params.max_fit_error_px);
 
         // image size: the features' (the extractor may run on a resized image), else the calibration's
@@ -293,6 +296,20 @@ struct OrbMatcher {
                                     s.matched,        s.rejected_dist,   s.rejected_ratio,  s.rejected_unique,
                                     s.rejected_parallax, s.rejected_reproj, s.rejected_subpixel, s.ms,
                                     s.subpixel_ms};
+        frame.keypoints[0] = left.keypoints;
+        frame.keypoints[1] = right.keypoints;
+        frame.descriptors[0] = left.descriptors;   // shared, not copied: the features are not modified
+        frame.descriptors[1] = right.descriptors;
+        frame.bearings[0] = sm.bearing[0];
+        frame.bearings[1] = sm.bearing[1];
+        frame.width = w;
+        frame.height = h;
+        frame.scale_factors = left.scale_factors;
+        frame.left_to_right = sm.left_to_right;
+        frame.right_to_left = sm.right_to_left;
+        frame.points = sm.points;
+        frame.depth = sm.depth;
+
         const std::int64_t now = steady_ns();
         const std::int64_t start = (left.extract_start_ns && right.extract_start_ns)
                                        ? std::min(left.extract_start_ns, right.extract_start_ns)
@@ -389,9 +406,9 @@ struct OrbMatcher {
 
 FW_REGISTER_ALGORITHM_CLASS(OrbMatcher,
     INPUTS(("calib", calib::StereoImuRig, latest), ("params", OrbMatcherParams, latest)),
-    OUTPUTS(("match", orb::Match)),
+    OUTPUTS(("match", orb::Match), ("stereo", orb::StereoFrame)),
     RESOURCES(("gpu", gpu::Device, write)),
     ON_SYNC((("left", orb::Features), ("right", orb::Features)), &OrbMatcher::on_pair, USES("calib", "params", "gpu"),
-            EMITS("match")),
+            EMITS("match", "stereo")),
     ON_EOS(&OrbMatcher::on_eos),
     OPTIONS(SYNC_SLOP(1ms)));

@@ -11,6 +11,7 @@
 | `params` | `OrbMatcherParams`（latest，可不接） | [params/orb_matcher_params.hpp](../../params/orb_matcher_params.hpp)、[config/orb_matcher.yaml](../../config/orb_matcher.yaml) |
 | `gpu` | `gpu::Device`（資源，write） | 框的 GPU（[types/gpu/device.hpp](../../types/gpu/device.hpp)），跟兩個 extractor 接同一個 |
 | `match` | `orb::Match` | [types/orb/match.hpp](../../types/orb/match.hpp)，時間戳記同左眼 |
+| `stereo` | `orb::StereoFrame` | [types/orb/stereo_frame.hpp](../../types/orb/stereo_frame.hpp)：兩眼的 keypoint、描述子、bearing 與配對結果，給 tracking（stereo-inertial 時先經過 `imu_preintegration`）。時間戳記同左眼 |
 
 ```yaml
 edges:
