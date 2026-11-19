@@ -1,0 +1,5 @@
+# tracking block (params/orb_tracking_params.hpp). Values of ORB-SLAM3's EuRoC settings.
+sensor: stereo_inertial   # stereo | stereo_inertial
+fps: 20
+th_depth: 60.0            # baselines
+insert_kfs_when_lost: true

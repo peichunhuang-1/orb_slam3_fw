@@ -253,17 +253,21 @@ ORB-SLAM3 的程式不整包移植。邏輯與數學與原版一致，實作重�
 ```
 types/
   geometry/so3.hpp               SO3 exp/log/右 Jacobian                                       ~120
+  geometry/se3.hpp               剛體變換：四元數加平移，運算與 Sophus 相同                        ~100
   camera/                        KB8、StereoRig、rig_from_calib：從 orb_matcher 搬來（namespace camera） 既有
   orb/hamming.hpp                從 orb_matcher/core 搬來（orb::hamming256）                       既有
   orb/stereo_frame.hpp           orb_matcher 的新輸出                                            ~60
+  orb/feature_grid.hpp           64×48 的 keypoint 格子與視窗搜尋（GetFeaturesInArea）             ~70
+  orb/frame_features.hpp         Frame 與它產生的 keyframe 共用的特徵（不複製）、尺度層級            ~70
   imu/preintegrated.hpp/.cpp     積分、Jacobian 修正、串接、Reintegrate                           ~350
-  map/keyframe.hpp map_point.hpp map.hpp atlas.hpp
-                                 純資料，以 id 互相引用；map point 用 slot vector                  ~350
-  map/atlas_ops.cpp              加觀測、covisibility、法向與深度、代表描述子、建立 stereo 點         ~300
-  map/bow_index.hpp/.cpp         keyframe 的 BoW 反向索引（只有索引）                              ~120
-  map/vocabulary.hpp/.cpp        詞彙樹、fw_load、transform、score                                ~250
-  tracking/frame.hpp/.cpp        Frame：特徵、bearing、grid、point id、outlier、位姿、IMU           ~250
-  tracking/tracker.hpp state.hpp status.hpp mapper_status.hpp mapper_command.hpp               ~220
+  map/ids.hpp keyframe.hpp map_point.hpp map.hpp atlas.hpp keyframe_ref.hpp
+                                 純資料，以 id 互相引用；keyframe 與 map point 用 slot vector        ~400
+  map/atlas_ops.hpp/.cpp         加觀測、covisibility、spanning tree、bad、Replace、法向與深度、
+                                 代表描述子、建立 stereo 點                                         ~450
+  map/bow_index.hpp/.cpp         keyframe 的 BoW 反向索引（只有索引）                              ~70
+  map/vocabulary.hpp/.cpp        詞彙樹、fw_load、transform、score                                ~350
+  tracking/frame.hpp/.cpp        Frame：特徵、point id、outlier、位姿、IMU                         ~180
+  tracking/tracker.hpp state.hpp status.hpp mapper_status.hpp mapper_command.hpp               ~200
 algorithms/
   orb_tracking/shared/
     pose_optimizer.hpp/.cpp      PoseOptimization：Huber、4 輪重新判定 outlier                    ~250
@@ -287,6 +291,30 @@ graphs/tracking_job.graph.yaml
 graphs/trees/tracking/*.tree.yaml
                                                                                  合計約 6,000–6,500 行
 ```
+
+### 型別的實作細節
+
+- **順序以 id 取代指標**：ORB-SLAM3 有幾處以指標為鍵的容器，走訪順序就是指標位址的順序，例如 `MapPoint::mObservations`、`mConnectedKeyFrameWeights`、`Map` 的集合。這裡都改以 id 為鍵，結果因此是決定性的。順序會影響結果的地方有：代表描述子同分時取哪一個、covisibility 同權重時的先後、`UpdateConnections` 選哪個 keyframe 當 parent，以及 `GetAllMapPoints` 的順序。
+- **slot vector**：keyframe 與 map point 存在以 id 為索引的陣列。
+  - 變成 bad 之後物件仍然保留，與 ORB-SLAM3 相同，因為 `GetReplaced` 與軌跡的 reference keyframe 還會用到。
+  - `ResetActiveMap` 之後，該地圖的 keyframe 也保留，只是不再屬於任何地圖，同樣與原版一致。
+  - 只有 `Reset`（`clearAtlas`）會清空陣列，keyframe 的 id 從 0 重新編號（原版 `KeyFrame::nNextId = 0`）。map point 的 id 也跟著從 0 重新編號；原版不重設，但沒有邏輯依賴它。
+- **只支援 KB8 雙目**：每個 keyframe 都有兩台相機，所以每個觀測讓 `nObs` 加 1，不使用 `mvuRight` 的分支。
+- **查詢用的暫存不放在型別裡**：ORB-SLAM3 放在 `KeyFrame`、`MapPoint` 上的查詢暫存，例如 `mnRelocQuery`、`mnTrackReferenceForFrame`、`mTrackProjX`、`mbTrackInView`，由使用的葉節點自己保存。
+- **詞彙檔**：`data/orb_vocabulary/ORBvoc.bin.tar.gz` 由 `tools/orb_vocabulary` 從 ORBvoc.txt 轉出，與 reference 的 `ORBvoc.bin` 逐位元組相同。建置時若 `ORBvoc.bin` 不存在，就從壓縮檔解開。
+
+### shared 的實作細節
+
+- **`pose_optimizer`**：把 g2o 的 Levenberg-Marquardt 照原樣寫出來，包括停止條件、`exp(δ)·T` 的左乘更新、LDLT，以及 Huber 的 δ² 存成 float。原版有幾個容易漏掉的行為也照做：
+  - 每一輪都從進入時的位姿重新開始：原版每輪從 Frame 重設頂點，而 Frame 的位姿到最後才寫回。
+  - 判定 outlier 用的 chi2 是最後一次算出的誤差。步驟被拒絕時，g2o 留下的是被拒絕那一步的誤差。
+  - 與 pose_optimization 的 8 組標準答案比對：inlier 數與每個 outlier 判定都相同，位姿差在 float 的捨入以內。
+- **KB8 投影**：`camera::KannalaBrandt8` 多了 `project_orb`、`project_jacobian_orb`，照原版的寫法實作（double 的點也以 `atan2f`、`sqrtf` 算 θ、ψ）。原本的 `project` 不變，matcher 繼續使用。
+- **rotation histogram**：原版的 bin 是 `round(rot / 30)`（把 `HISTO_LENGTH` 當成角度寬度，而不是格數），所以只用到 0..12 格。這會影響保留哪些配對，照原樣實作。
+- **SearchByBoW**：照原版的兩個特性實作：
+  - 右眼只有在左眼的最佳距離 ≤ TH_LOW 時才比對，不論左眼的比例測試是否通過。
+  - 右眼沒有比例測試，原版的條件是 `|| true`。
+- **`mnFramesToResetIMU`**：reference 的版本沒有初始化這個成員。ORB-SLAM3 v1.0 設為 `mMaxFrames`，這裡也取 `params.fps`。
 
 ### 與原版一致的驗證
 

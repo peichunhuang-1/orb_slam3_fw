@@ -85,6 +85,61 @@ Eigen::Matrix<float, 2, 3> KannalaBrandt8::project_jacobian(const Eigen::Vector3
     return J;
 }
 
+// The parameters are floats (ORB-SLAM3's mvParameters); fx_ ... hold them exactly.
+Eigen::Vector2d KannalaBrandt8::project_orb(const Eigen::Vector3d& v) const {
+    const float p0 = float(fx_), p1 = float(fy_), p2 = float(cx_), p3 = float(cy_);
+    const float p4 = float(k_[0]), p5 = float(k_[1]), p6 = float(k_[2]), p7 = float(k_[3]);
+    const double x2_plus_y2 = v[0] * v[0] + v[1] * v[1];
+    const double theta = atan2f(sqrtf(float(x2_plus_y2)), float(v[2]));
+    const double psi = atan2f(float(v[1]), float(v[0]));
+    const double theta2 = theta * theta;
+    const double theta3 = theta * theta2;
+    const double theta5 = theta3 * theta2;
+    const double theta7 = theta5 * theta2;
+    const double theta9 = theta7 * theta2;
+    const double r = theta + p4 * theta3 + p5 * theta5 + p6 * theta7 + p7 * theta9;
+    return Eigen::Vector2d(p0 * r * std::cos(psi) + p2, p1 * r * std::sin(psi) + p3);
+}
+
+Eigen::Vector2f KannalaBrandt8::project_orb(const Eigen::Vector3f& v) const {
+    const float p0 = float(fx_), p1 = float(fy_), p2 = float(cx_), p3 = float(cy_);
+    const float p4 = float(k_[0]), p5 = float(k_[1]), p6 = float(k_[2]), p7 = float(k_[3]);
+    const float x2_plus_y2 = v[0] * v[0] + v[1] * v[1];
+    const float theta = atan2f(sqrtf(x2_plus_y2), v[2]);
+    const float psi = atan2f(v[1], v[0]);
+    const float theta2 = theta * theta;
+    const float theta3 = theta * theta2;
+    const float theta5 = theta3 * theta2;
+    const float theta7 = theta5 * theta2;
+    const float theta9 = theta7 * theta2;
+    const float r = theta + p4 * theta3 + p5 * theta5 + p6 * theta7 + p7 * theta9;
+    return Eigen::Vector2f(p0 * r * std::cos(psi) + p2, p1 * r * std::sin(psi) + p3);
+}
+
+Eigen::Matrix<double, 2, 3> KannalaBrandt8::project_jacobian_orb(const Eigen::Vector3d& v) const {
+    const float p0 = float(fx_), p1 = float(fy_);
+    const float p4 = float(k_[0]), p5 = float(k_[1]), p6 = float(k_[2]), p7 = float(k_[3]);
+    const double x2 = v[0] * v[0], y2 = v[1] * v[1], z2 = v[2] * v[2];
+    const double r2 = x2 + y2;
+    const double r = std::sqrt(r2);
+    const double r3 = r2 * r;
+    const double theta = std::atan2(r, v[2]);
+    const double theta2 = theta * theta, theta3 = theta2 * theta;
+    const double theta4 = theta2 * theta2, theta5 = theta4 * theta;
+    const double theta6 = theta2 * theta4, theta7 = theta6 * theta;
+    const double theta8 = theta4 * theta4, theta9 = theta8 * theta;
+    const double f = theta + theta3 * p4 + theta5 * p5 + theta7 * p6 + theta9 * p7;
+    const double fd = 1 + 3 * p4 * theta2 + 5 * p5 * theta4 + 7 * p6 * theta6 + 9 * p7 * theta8;
+    Eigen::Matrix<double, 2, 3> J;
+    J(0, 0) = p0 * (fd * v[2] * x2 / (r2 * (r2 + z2)) + f * y2 / r3);
+    J(1, 0) = p1 * (fd * v[2] * v[1] * v[0] / (r2 * (r2 + z2)) - f * v[1] * v[0] / r3);
+    J(0, 1) = p0 * (fd * v[2] * v[1] * v[0] / (r2 * (r2 + z2)) - f * v[1] * v[0] / r3);
+    J(1, 1) = p1 * (fd * v[2] * y2 / (r2 * (r2 + z2)) + f * x2 / r3);
+    J(0, 2) = -p0 * fd * v[0] / (r2 + z2);
+    J(1, 2) = -p1 * fd * v[1] / (r2 + z2);
+    return J;
+}
+
 float KannalaBrandt8::pixels_per_radian(float theta) const {
     const double f = std::min(fx_, fy_);
     if (theta < 1e-6f) return float(f);

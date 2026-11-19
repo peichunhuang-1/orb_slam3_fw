@@ -7,3 +7,5 @@ log/
 graphs/*.launch.py
 graphs/__pycache__/
 *.mcap
+# ORB vocabulary: the compressed file is in git, the extracted one is not
+data/orb_vocabulary/ORBvoc.bin

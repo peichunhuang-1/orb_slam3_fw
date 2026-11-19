@@ -29,6 +29,13 @@ public:
     // d(u, v) / d(x, y, z) at p (p != 0, within max_theta()).
     Eigen::Matrix<float, 2, 3> project_jacobian(const Eigen::Vector3f& p) const;
 
+    // ORB-SLAM3's KannalaBrandt8::project and projectJac exactly as written, for code that reproduces
+    // ORB-SLAM3 (tracking): θ = atan2f(sqrtf(x² + y²), z), ψ = atan2f(y, x) in float even for a double point,
+    // u = fx·r(θ)·cos ψ + cx. No range checks.
+    Eigen::Vector2d project_orb(const Eigen::Vector3d& p) const;
+    Eigen::Vector2f project_orb(const Eigen::Vector3f& p) const;
+    Eigen::Matrix<double, 2, 3> project_jacobian_orb(const Eigen::Vector3d& p) const;
+
     // Smallest image displacement (pixels) per radian of bearing rotation at angle θ from the
     // optical axis: min over the radial (r'(θ)) and tangential (r(θ) / sin θ) directions, times
     // min(fx, fy). Converts pixel noise to angular noise: σ_ang = σ_px / pixels_per_radian(θ).

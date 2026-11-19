@@ -75,18 +75,65 @@ if(BUILD_TESTING)
   add_test(NAME orb_matcher_subpixel_test COMMAND orb_matcher_subpixel_test --trials 10)
 endif()
 
+# ORB vocabulary (map::Vocabulary's store): data/orb_vocabulary/ORBvoc.bin is not in git; it is extracted from
+# ORBvoc.bin.tar.gz when missing. tools/orb_vocabulary made that file from ORB-SLAM3's ORBvoc.txt (not installed:
+# build/orb_slam3_fw/orb_vocabulary TEXT BINARY).
+set(ORB_VOCABULARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data/orb_vocabulary)
+set(ORB_VOCABULARY_BIN ${ORB_VOCABULARY_DIR}/ORBvoc.bin)
+if(NOT EXISTS ${ORB_VOCABULARY_BIN} AND EXISTS ${ORB_VOCABULARY_BIN}.tar.gz)
+  message(STATUS "extracting ${ORB_VOCABULARY_BIN}")
+  execute_process(COMMAND ${CMAKE_COMMAND} -E tar xzf ${ORB_VOCABULARY_BIN}.tar.gz
+                  WORKING_DIRECTORY ${ORB_VOCABULARY_DIR} RESULT_VARIABLE voc_result)
+  if(NOT voc_result EQUAL 0)
+    message(FATAL_ERROR "cannot extract ${ORB_VOCABULARY_BIN}.tar.gz")
+  endif()
+endif()
+add_executable(orb_vocabulary tools/orb_vocabulary/orb_vocabulary.cpp types/map/vocabulary.cpp)
+target_include_directories(orb_vocabulary PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(orb_vocabulary opencv_core fw::core)
+
 # types/ tests (not installed): build/orb_slam3_fw/types_<name>_test
 #   so3             types/geometry/so3.hpp: exp/log vs AngleAxis, Jacobians vs numerical, ORB-SLAM3 formulas
 #   preintegration  types/imu/preintegrated + imu_preintegration's interval vs tests/fixtures/orb_slam3/preintegration
+#   vocabulary      types/map/vocabulary vs tests/fixtures/orb_slam3/bow (DBoW2 on ORBvoc)
+#   se3             types/geometry/se3.hpp vs Eigen (Sophus's operations)
+#   atlas           types/map/atlas_ops on synthetic keyframes (covisibility, spanning tree, culling, replace)
+#   tracking_frame  types/tracking: Frame from a stereo message, poses, the tracking types' registration
 set(types_so3_test_SOURCES)
+set(types_se3_test_SOURCES)
+set(types_atlas_test_SOURCES types/map/atlas_ops.cpp types/map/bow_index.cpp types/map/vocabulary.cpp
+    types/imu/preintegrated.cpp types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
+set(types_tracking_frame_test_SOURCES types/tracking/frame.cpp types/map/vocabulary.cpp types/imu/preintegrated.cpp)
 set(types_preintegration_test_SOURCES types/imu/preintegrated.cpp)
-foreach(t so3 preintegration)
+set(types_vocabulary_test_SOURCES types/map/vocabulary.cpp)
+foreach(t so3 se3 preintegration vocabulary atlas tracking_frame)
   add_executable(types_${t}_test tests/types/${t}_test.cpp ${types_${t}_test_SOURCES})
   target_include_directories(types_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_compile_definitions(types_${t}_test PRIVATE ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3")
-  target_link_libraries(types_${t}_test Eigen3::Eigen fw::core)
+  target_compile_definitions(types_${t}_test PRIVATE ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3"
+                                                     ORB_VOCABULARY_BIN="${ORB_VOCABULARY_BIN}")
+  target_link_libraries(types_${t}_test Eigen3::Eigen opencv_core fw::core)
   if(BUILD_TESTING)
     add_test(NAME types_${t}_test COMMAND types_${t}_test)
+  endif()
+endforeach()
+
+# orb_tracking tests (not installed): build/orb_slam3_fw/orb_tracking_<name>_test
+#   pose_optimizer  shared/pose_optimizer vs tests/fixtures/orb_slam3/pose_optimization (Optimizer::PoseOptimization)
+set(ORB_TRACKING_TEST_TYPES types/tracking/frame.cpp types/map/vocabulary.cpp types/imu/preintegrated.cpp
+    types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
+#   search_by_bow   shared/search_by_bow and rotation_histogram on hand-made keyframe / frame pairs
+set(orb_tracking_pose_optimizer_test_SOURCES algorithms/orb_tracking/shared/pose_optimizer.cpp)
+set(orb_tracking_search_by_bow_test_SOURCES algorithms/orb_tracking/shared/search_by_bow.cpp)
+foreach(t pose_optimizer search_by_bow)
+  add_executable(orb_tracking_${t}_test tests/orb_tracking/${t}_test.cpp ${orb_tracking_${t}_test_SOURCES}
+                 ${ORB_TRACKING_TEST_TYPES})
+  target_include_directories(orb_tracking_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(orb_tracking_${t}_test PRIVATE
+                             ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3"
+                             ORB_VOCABULARY_BIN="${ORB_VOCABULARY_BIN}")
+  target_link_libraries(orb_tracking_${t}_test Eigen3::Eigen opencv_core fw::core)
+  if(BUILD_TESTING)
+    add_test(NAME orb_tracking_${t}_test COMMAND orb_tracking_${t}_test)
   endif()
 endforeach()
 
