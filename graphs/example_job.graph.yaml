@@ -16,6 +16,7 @@ edges:
   - config://euroc_mcap_driver.yaml -> euroc_mcap_driver.params
   - euroc_mcap_driver.left -> orb_extractor_left.image
   - euroc_mcap_driver.right -> orb_extractor_right.image
+  - config://orb_extractor.yaml -> [orb_extractor_left.params, orb_extractor_right.params]
   - orb_extractor_left.features -> orb_matcher.left
   - orb_extractor_right.features -> orb_matcher.right
   - euroc_mcap_driver.calib -> orb_matcher.calib

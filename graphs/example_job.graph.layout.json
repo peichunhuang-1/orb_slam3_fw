@@ -5,9 +5,13 @@
       "x": -383,
       "y": -5
     },
+    "config://orb_extractor.yaml": {
+      "x": -5,
+      "y": 226
+    },
     "config://orb_matcher.yaml": {
-      "x": 512,
-      "y": 49
+      "x": 576,
+      "y": -86
     },
     "euroc_mcap_driver": {
       "x": -37,
@@ -18,16 +22,16 @@
       "y": -163
     },
     "orb_extractor_left": {
-      "x": 248,
-      "y": -67
+      "x": 339,
+      "y": -88
     },
     "orb_extractor_right": {
-      "x": 248,
-      "y": 51
+      "x": 339,
+      "y": 39
     },
     "orb_matcher": {
-      "x": 761,
-      "y": -12
+      "x": 913,
+      "y": -33
     }
   }
 }
