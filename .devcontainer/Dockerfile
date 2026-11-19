@@ -1,4 +1,7 @@
-# The base image holds ROS 2 Humble and fw 0.1.0. Add what this project needs on top.
+# The base image holds ROS 2 Humble and fw 0.1.0 (with the behavior tree, M9 recording/viewer and the shm link), and
+# both .vsix (fw-editor, fw-viewer) in /usr/local/share/fw/. fw kept the tag 0.1.0 across those changes, so an older
+# fw-humble:0.1.0 on this machine has to be rebuilt first (fw/docker/build_base.sh arm64), then
+# "Dev Containers: Rebuild Container" and `rm -rf build install log` (the blocks' ABI changed).
 
 # ---------------------------------------------------------------------------------------------------
 # Stage 1: Mesa's Raspberry Pi 5 Vulkan driver (v3dv). Ubuntu 22.04's Mesa (23.2) predates the Pi 5's

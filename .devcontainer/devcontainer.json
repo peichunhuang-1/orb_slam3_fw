@@ -8,9 +8,11 @@
     "--ipc=host",
     "--cap-add=SYS_NICE",
     "--ulimit=rtprio=99",
+    // gdb on a box (fw/docs/reference/debugging.md): without it, "ptrace: Inappropriate ioctl for device"
+    "--cap-add=SYS_PTRACE",
     // GPU (VideoCore VII render node) for the orb_extractor Vulkan backend; gpu_access.sh opens it up
     "--device=/dev/dri"
   ],
   "postStartCommand": "bash .devcontainer/gpu_access.sh",
-  "customizations": { "vscode": { "extensions": ["/usr/local/share/fw/fw-editor.vsix"] } }
+  "customizations": { "vscode": { "extensions": ["/usr/local/share/fw/fw-editor.vsix", "/usr/local/share/fw/fw-viewer.vsix"] } }
 }
