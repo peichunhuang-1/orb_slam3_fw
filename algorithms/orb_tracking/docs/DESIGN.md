@@ -314,6 +314,17 @@ graphs/trees/tracking/*.tree.yaml
 - **SearchByBoW**：照原版的兩個特性實作：
   - 右眼只有在左眼的最佳距離 ≤ TH_LOW 時才比對，不論左眼的比例測試是否通過。
   - 右眼沒有比例測試，原版的條件是 `|| true`。
+- **pose-inertial 最佳化**（`track_local_map/pose_inertial_optimizer`）：把 g2o 的 Gauss-Newton（每輪 10 次，沒有停止條件）照原樣寫出。原版這些行為也照做：
+  - 每一輪判定 outlier 用的誤差，是那一輪最後一次更新**之前**算的；
+  - 留在 Frame 上的先驗用最後的線性化點算 H。原版的對稱化寫成 `(H + H) / 2`，等於沒有對稱化，這裡照寫，再把 1e-12 以下的特徵值設為 0；
+  - LastFrame 版本把上一影格邊緣化：SVD 偽逆，門檻 1e-6。
+
+  與 pose_inertial 的 12 組標準答案比對：inlier 數與 outlier 判定完全相同，狀態差在 1e-6 以內，先驗 H 的相對差約 1e-8。另外以本設計的作法（b̄ = 0 預積分，再以 Jacobian 修正到 keyframe 的 bias）重跑 LastKeyFrame：inlier 數相同，位置差不超過 3e-6 m。
+- **MLPnP**（`relocalize/mlpnp_solver`）：
+  - 原版的 GN Jacobian 是自動產生的展開式，這裡改用同一個導數的解析形式 `−R[X]×Jr(w)`。`computePose` 與標準答案的差在 1e-15。
+  - 原版的 `Refine` 雖然用最佳的 inlier 重解，結果卻沒有使用，檢查並回傳的仍是這一輪的假設。這裡照這個行為，直接重新檢查這一輪的假設。
+  - RANSAC 的取樣用 solver 自己的亂數產生器（固定種子），與原版的取樣不同，所以兩者都和真值比：位姿誤差與真正 inlier 的比例相當。
+- **KB8 反投影**：`camera::KannalaBrandt8::unproject_orb` 照原版寫：z = 1 的射線，float 的牛頓法，與標準答案的 bearing 相同。
 - **`mnFramesToResetIMU`**：reference 的版本沒有初始化這個成員。ORB-SLAM3 v1.0 設為 `mMaxFrames`，這裡也取 `params.fps`。
 
 ### 與原版一致的驗證

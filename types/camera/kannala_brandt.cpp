@@ -140,6 +140,31 @@ Eigen::Matrix<double, 2, 3> KannalaBrandt8::project_jacobian_orb(const Eigen::Ve
     return J;
 }
 
+Eigen::Vector3f KannalaBrandt8::unproject_orb(const Eigen::Vector2f& p2D) const {
+    const float p0 = float(fx_), p1 = float(fy_), p2 = float(cx_), p3 = float(cy_);
+    const float p4 = float(k_[0]), p5 = float(k_[1]), p6 = float(k_[2]), p7 = float(k_[3]);
+    const float precision = 1e-6f;
+    const float pw_x = (p2D.x() - p2) / p0, pw_y = (p2D.y() - p3) / p1;
+    float scale = 1.f;
+    const double pi = 3.14159265358979323846;
+    float theta_d = sqrtf(pw_x * pw_x + pw_y * pw_y);
+    theta_d = fminf(fmaxf(float(-pi / 2.f), theta_d), float(pi / 2.f));
+    if (theta_d > 1e-8) {
+        float theta = theta_d;
+        for (int j = 0; j < 10; j++) {
+            const float theta2 = theta * theta, theta4 = theta2 * theta2, theta6 = theta4 * theta2, theta8 = theta4 * theta4;
+            const float k0_theta2 = p4 * theta2, k1_theta4 = p5 * theta4;
+            const float k2_theta6 = p6 * theta6, k3_theta8 = p7 * theta8;
+            const float theta_fix = (theta * (1 + k0_theta2 + k1_theta4 + k2_theta6 + k3_theta8) - theta_d) /
+                                    (1 + 3 * k0_theta2 + 5 * k1_theta4 + 7 * k2_theta6 + 9 * k3_theta8);
+            theta = theta - theta_fix;
+            if (fabsf(theta_fix) < precision) break;
+        }
+        scale = std::tan(theta) / theta_d;
+    }
+    return Eigen::Vector3f(pw_x * scale, pw_y * scale, 1.f);
+}
+
 float KannalaBrandt8::pixels_per_radian(float theta) const {
     const double f = std::min(fx_, fy_);
     if (theta < 1e-6f) return float(f);

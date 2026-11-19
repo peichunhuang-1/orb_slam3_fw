@@ -35,6 +35,9 @@ public:
     Eigen::Vector2d project_orb(const Eigen::Vector3d& p) const;
     Eigen::Vector2f project_orb(const Eigen::Vector3f& p) const;
     Eigen::Matrix<double, 2, 3> project_jacobian_orb(const Eigen::Vector3d& p) const;
+    // ORB-SLAM3's KannalaBrandt8::unproject: the ray at z = 1 (θ by up to 10 Newton steps in float, precision
+    // 1e-6, θd clamped to ±π/2)
+    Eigen::Vector3f unproject_orb(const Eigen::Vector2f& uv) const;
 
     // Smallest image displacement (pixels) per radian of bearing rotation at angle θ from the
     // optical axis: min over the radial (r'(θ)) and tangential (r(θ) / sin θ) directions, times
