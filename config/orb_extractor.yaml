@@ -1,6 +1,6 @@
 # orb_extractor block (params/orb_extractor_params.hpp). Values as ORB-SLAM3's EuRoC settings.
 backend: auto     # auto | gpu | cpu
-nfeatures: 1200
+nfeatures: 500   # per eye
 scale_factor: 1.2
 nlevels: 8
 ini_th_fast: 20
