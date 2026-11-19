@@ -5,7 +5,7 @@
 
 namespace {
 void example_pulse(fw::DriverContext& ctx) {
-    for (int k = 1; ctx.sleep_for(std::chrono::milliseconds(500)); ++k)
+    for (int k = 1; ctx.sleep_period(std::chrono::milliseconds(500)); ++k)
         ctx.emit("n", k, fw::Time{static_cast<std::int64_t>(k) * 500000000});
 }
 }  // namespace

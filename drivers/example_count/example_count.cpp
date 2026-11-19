@@ -6,7 +6,7 @@
 namespace {
 void example_count(fw::DriverContext& ctx) {
     for (int k = 1; k <= 20; ++k) {
-        if (!ctx.sleep_for(std::chrono::milliseconds(100))) return;  // stopped: not the end of the data
+        if (!ctx.sleep_period(std::chrono::milliseconds(100))) return;  // stopped: not the end of the data
         ctx.emit("n", k, fw::Time{static_cast<std::int64_t>(k) * 100000000});
     }
     ctx.eos();  // a finite driver ends with EOS
