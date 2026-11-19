@@ -3,8 +3,8 @@
 雙目特徵配對，統一用 Kannala-Brandt（KB8）相機模型，用極線約束找候選點，取代 ORB-SLAM3 原本的做法
 （pinhole 用 rectified 掃描列；fisheye 在重疊區用 `BFMatcher` 暴力配對）。目標平台 Pi 5：單執行緒、每幀不配置記憶體、熱路徑 NEON。
 
-原始碼對照：`core/bearing`（第 1 節的 θ, φ, σ）、`core/epipolar_index`（依 θ 排序）、`core/hamming`、
-`core/triangulate`（第 2 節）、`core/subpixel`（第 3 節）、`stereo_matcher.cpp`（串起來）、`rig_from_calib`（標定 → KB8，第 4 節）。
+原始碼對照：`core/bearing`（第 1 節的 θ, φ, σ）、`core/epipolar_index`（依 θ 排序）、`types/orb/hamming`、
+`core/triangulate`（第 2 節）、`core/subpixel`（第 3 節）、`stereo_matcher.cpp`（串起來）、`types/camera/rig_from_calib`（標定 → KB8，第 4 節）。
 
 ## 1. 核心想法：在單位球上做 rectification，影像不用 warp
 

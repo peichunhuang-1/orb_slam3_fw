@@ -1,4 +1,4 @@
-#include "algorithms/orb_matcher/rig_from_calib.hpp"
+#include "types/camera/rig_from_calib.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,7 +7,7 @@
 
 #include <Eigen/Dense>
 
-namespace orb_matcher {
+namespace camera {
 
 void Radtan::distort(double x, double y, double& xd, double& yd) const {
     const double r2 = x * x + y * y, rad = 1 + r2 * (k1 + r2 * (k2 + r2 * k3));
@@ -124,4 +124,4 @@ StereoRig stereoRigFromCalib(const calib::StereoImuRig& rig, ModelFit* left_fit,
     return StereoRig(left, right, T_12.linear().cast<float>(), T_12.translation().cast<float>());
 }
 
-}  // namespace orb_matcher
+}  // namespace camera

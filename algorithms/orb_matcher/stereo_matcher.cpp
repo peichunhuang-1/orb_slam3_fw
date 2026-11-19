@@ -10,14 +10,14 @@
 
 #include "algorithms/orb_matcher/core/bearing.hpp"
 #include "algorithms/orb_matcher/core/epipolar_index.hpp"
-#include "algorithms/orb_matcher/core/hamming.hpp"
+#include "types/orb/hamming.hpp"
 #include "algorithms/orb_matcher/core/subpixel.hpp"
 #include "algorithms/orb_matcher/core/triangulate.hpp"
 
 namespace orb_matcher {
 
 struct StereoMatcher::Impl {
-    StereoRig rig;
+    camera::StereoRig rig;
     StereoMatcherParams p;
     Eigen::Matrix3f R_rL, R_rR;   // left / right camera -> rectification frame
     Eigen::Matrix3f R_21;         // left -> right camera
@@ -32,7 +32,7 @@ struct StereoMatcher::Impl {
 
     // Image direction of the epipolar curve at bearing f: the tangent of the great circle through
     // f and the baseline direction b (camera frame), towards b, projected.
-    static bool epipolarDirection(const KannalaBrandt8& cam, const Eigen::Vector3f& f, const Eigen::Vector3f& b,
+    static bool epipolarDirection(const camera::KannalaBrandt8& cam, const Eigen::Vector3f& f, const Eigen::Vector3f& b,
                                   Eigen::Vector2f& dir) {
         Eigen::Vector3f t = b - b.dot(f) * f;
         if (t.squaredNorm() < 1e-12f) return false;
@@ -56,7 +56,7 @@ struct StereoMatcher::Impl {
                       Eigen::Vector2f& uvR, Eigen::Vector3f& fR, SubpixelJob& job) const {
         const int lvl = kl.octave;
         if (lvl < 0 || lvl >= int(scale.size())) return false;
-        const KannalaBrandt8& camR = rig.camera(1);
+        const camera::KannalaBrandt8& camR = rig.camera(1);
         {
             const Eigen::Vector3f pr = R_rR * fR;   // rectification frame
             const float sinPhi = std::sqrt(pr.y() * pr.y() + pr.z() * pr.z());
@@ -115,7 +115,7 @@ struct StereoMatcher::Impl {
     }
 };
 
-StereoMatcher::StereoMatcher(const StereoRig& rig, const StereoMatcherParams& params, int max_features)
+StereoMatcher::StereoMatcher(const camera::StereoRig& rig, const StereoMatcherParams& params, int max_features)
     : impl_(std::make_unique<Impl>()) {
     const StereoMatcherParams& p = params;
     if (p.th_dist < 0 || p.th_dist > 256) throw std::invalid_argument("StereoMatcher: th_dist must be in [0, 256]");
@@ -158,15 +158,15 @@ StereoMatcher::StereoMatcher(const StereoRig& rig, const StereoMatcherParams& pa
 
 StereoMatcher::~StereoMatcher() = default;
 
-const StereoRig& StereoMatcher::rig() const { return impl_->rig; }
+const camera::StereoRig& StereoMatcher::rig() const { return impl_->rig; }
 const StereoMatcherParams& StereoMatcher::params() const { return impl_->p; }
 
 void StereoMatcher::check_image_size(int width, int height) const {
-    const StereoRig& r = impl_->rig;
+    const camera::StereoRig& r = impl_->rig;
     if (width != r.width() || height != r.height())
         throw std::invalid_argument("StereoMatcher: images are " + std::to_string(width) + "x" + std::to_string(height) +
                                     ", the rig is calibrated for " + std::to_string(r.width()) + "x" +
-                                    std::to_string(r.height()) + " (StereoRig::resized)");
+                                    std::to_string(r.height()) + " (camera::StereoRig::resized)");
 }
 
 void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, const std::vector<float>& scale_factors,
@@ -211,7 +211,7 @@ void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, c
             const float gamma = ix.phi[j] - phiL;
             if (gamma < gMin - eps || gamma > gMax + eps) continue;
             ++st.hamming_evals;
-            const int d = hamming256(dL, &ix.desc[size_t(j) * 32]);
+            const int d = orb::hamming256(dL, &ix.desc[size_t(j) * 32]);
             if (d < best) {
                 second = best;
                 best = d;
@@ -246,8 +246,8 @@ void StereoMatcher::match(const ViewFeatures& left, const ViewFeatures& right, c
     out.right_uv.resize(nl);
     out.bearing[0].assign(m.bl.f.begin(), m.bl.f.end());
     out.bearing[1].assign(m.br.f.begin(), m.br.f.end());
-    const KannalaBrandt8& camL = m.rig.camera(0);
-    const KannalaBrandt8& camR = m.rig.camera(1);
+    const camera::KannalaBrandt8& camL = m.rig.camera(0);
+    const camera::KannalaBrandt8& camR = m.rig.camera(1);
     const int top = int(scale_factors.size()) - 1;
     auto sigma2 = [&](int octave) {
         const float s = p.sigma_px * (top >= 0 ? scale_factors[std::clamp(octave, 0, top)] : 1.f);

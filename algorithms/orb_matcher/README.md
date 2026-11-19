@@ -7,7 +7,7 @@
 | 埠 | 型別 | 說明 |
 |---|---|---|
 | `left`, `right` | `orb::Features`（sync，`SYNC_SLOP(1ms)`） | 兩眼的 `orb_extractor` 輸出。次像素修正讀它們的金字塔（extractor `keep_pyramid: true`，預設開，見下） |
-| `calib` | `calib::StereoImuRig`（latest） | `euroc_mcap_driver.calib`。KB8（equidistant）直接用；radtan（plumb_bob）擬合成 KB8（[rig_from_calib.hpp](rig_from_calib.hpp)） |
+| `calib` | `calib::StereoImuRig`（latest） | `euroc_mcap_driver.calib`。KB8（equidistant）直接用；radtan（plumb_bob）擬合成 KB8（[rig_from_calib.hpp](../../types/camera/rig_from_calib.hpp)） |
 | `params` | `OrbMatcherParams`（latest，可不接） | [params/orb_matcher_params.hpp](../../params/orb_matcher_params.hpp)、[config/orb_matcher.yaml](../../config/orb_matcher.yaml) |
 | `gpu` | `gpu::Device`（資源，write） | 框的 GPU（[types/gpu/device.hpp](../../types/gpu/device.hpp)），跟兩個 extractor 接同一個 |
 | `match` | `orb::Match` | [types/orb/match.hpp](../../types/orb/match.hpp)，時間戳記同左眼 |
@@ -57,11 +57,12 @@ edges:
 | 路徑 | 內容 |
 |---|---|
 | `orb_matcher.cpp` | fw block |
-| `rig_from_calib.hpp/.cpp` | `calib::StereoImuRig` → `StereoRig`：radtan → KB8 擬合、`T_c1_c2` |
-| `kannala_brandt.hpp/.cpp` | `KannalaBrandt8`：project / unproject（單位向量）/ Jacobian / `pixels_per_radian` / `resized` |
-| `stereo_rig.hpp/.cpp` | `StereoRig`：兩個 KB8 + `T_c1_c2` |
 | `stereo_matcher.hpp/.cpp` | `StereoMatcher`、`StereoMatcherParams`、`StereoMatches`（不依賴 fw） |
-| `core/` | bearing（θ, φ, σ）、依 θ 排序的右點索引、NEON Hamming、閉式三角化、沿極線次像素修正 |
+| `core/` | bearing（θ, φ, σ）、依 θ 排序的右點索引、閉式三角化、沿極線次像素修正 |
+| `../../types/camera/rig_from_calib.hpp/.cpp` | `camera::stereoRigFromCalib`：`calib::StereoImuRig` → `StereoRig`，radtan → KB8 擬合、`T_c1_c2`（tracking 也用） |
+| `../../types/camera/kannala_brandt.hpp/.cpp` | `camera::KannalaBrandt8`：project / unproject（單位向量）/ Jacobian / `pixels_per_radian` / `resized` |
+| `../../types/camera/stereo_rig.hpp/.cpp` | `camera::StereoRig`：兩個 KB8 + `T_c1_c2` |
+| `../../types/orb/hamming.hpp` | `orb::hamming256`（NEON） |
 | `gpu/subpixel_vk.hpp/.cpp`、`gpu/shaders/subpixel.comp` | GPU 次像素修正（`SubpixelBackend`），讀 extractor 留在 GPU 上的金字塔 |
 | `../../types/gpu/device.hpp/.cpp` | 資源型別 `gpu/Device`：框的 GPU，第一次用時建立 |
 | `../../types/gpu/context.hpp/.cpp` | Vulkan 裝置（`gpu::Context`）、GPU 金字塔與 buffer 池 |

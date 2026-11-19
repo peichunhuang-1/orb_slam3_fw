@@ -1,10 +1,10 @@
-#include "algorithms/orb_matcher/kannala_brandt.hpp"
+#include "types/camera/kannala_brandt.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
-namespace orb_matcher {
+namespace camera {
 
 KannalaBrandt8::KannalaBrandt8(float fx, float fy, float cx, float cy, float k1, float k2, float k3,
                                float k4, int width, int height)
@@ -104,4 +104,4 @@ KannalaBrandt8 KannalaBrandt8::resized(int width, int height) const {
                           float(k_[3]), width, height);
 }
 
-}  // namespace orb_matcher
+}  // namespace camera

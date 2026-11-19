@@ -1,0 +1,6 @@
+# the vocabulary the bow cases were made with: ORBvoc.txt (ORB-SLAM3's)
+k 1 1 10
+L 1 1 6
+words 1 1 971814
+weighting 1 1 0
+scoring 1 1 0

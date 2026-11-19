@@ -1,11 +1,11 @@
-#include "algorithms/orb_matcher/stereo_rig.hpp"
+#include "types/camera/stereo_rig.hpp"
 
 #include <stdexcept>
 
 #include <Eigen/LU>   // determinant()
 #include <Eigen/SVD>
 
-namespace orb_matcher {
+namespace camera {
 
 StereoRig::StereoRig(const KannalaBrandt8& left, const KannalaBrandt8& right, const Eigen::Matrix3f& R_12,
                      const Eigen::Vector3f& t_12)
@@ -24,4 +24,4 @@ StereoRig StereoRig::resized(int width, int height) const {
     return StereoRig(cam_[0].resized(width, height), cam_[1].resized(width, height), R_12_, t_12_);
 }
 
-}  // namespace orb_matcher
+}  // namespace camera

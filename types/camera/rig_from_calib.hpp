@@ -10,11 +10,11 @@
 // T_c1_c2 = T_body_left⁻¹ · T_body_right (the right camera's pose in the left one).
 #include <string>
 
-#include "algorithms/orb_matcher/kannala_brandt.hpp"
-#include "algorithms/orb_matcher/stereo_rig.hpp"
+#include "types/camera/kannala_brandt.hpp"
+#include "types/camera/stereo_rig.hpp"
 #include "types/calib/stereo_imu_rig.hpp"
 
-namespace orb_matcher {
+namespace camera {
 
 // How well the KB8 model reproduces the camera's own model (pixels, over a 4 px grid of the image).
 // All zero for a KB8 calibration taken as is.
@@ -44,4 +44,4 @@ KannalaBrandt8 cameraFromCalib(const calib::PinholeCamera& cam, ModelFit* fit = 
 // Throws std::invalid_argument as cameraFromCalib and the StereoRig constructor.
 StereoRig stereoRigFromCalib(const calib::StereoImuRig& rig, ModelFit* left_fit = nullptr, ModelFit* right_fit = nullptr);
 
-}  // namespace orb_matcher
+}  // namespace camera

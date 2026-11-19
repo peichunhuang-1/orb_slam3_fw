@@ -6,7 +6,7 @@
 #include <Eigen/Core>
 #include <opencv2/core/types.hpp>
 
-#include "algorithms/orb_matcher/kannala_brandt.hpp"
+#include "types/camera/kannala_brandt.hpp"
 
 namespace orb_matcher {
 
@@ -25,7 +25,7 @@ struct BearingSet {
 
 // R_rc: camera -> rectification frame. Keypoints outside the model's range, or closer than
 // asin(sin_phi_min) to the baseline, are invalid.
-void computeBearings(const KannalaBrandt8& cam, const Eigen::Matrix3f& R_rc, const cv::KeyPoint* kp, int n,
+void computeBearings(const camera::KannalaBrandt8& cam, const Eigen::Matrix3f& R_rc, const cv::KeyPoint* kp, int n,
                      const std::vector<float>& scale_factors, float sigma_px, float sin_phi_min, BearingSet& out);
 
 }  // namespace orb_matcher

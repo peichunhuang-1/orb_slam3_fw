@@ -7,7 +7,7 @@
 #include <arm_neon.h>
 #endif
 
-namespace orb_matcher {
+namespace orb {
 
 inline int hamming256(const uint8_t* a, const uint8_t* b) {
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -24,4 +24,4 @@ inline int hamming256(const uint8_t* a, const uint8_t* b) {
 #endif
 }
 
-}  // namespace orb_matcher
+}  // namespace orb

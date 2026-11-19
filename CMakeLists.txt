@@ -53,8 +53,8 @@ endif()
 #   build/orb_slam3_fw/orb_matcher_subpixel_test   sub-pixel refinement on rendered planes [--trials N]
 find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 add_library(orb_matcher_core STATIC
-  algorithms/orb_matcher/kannala_brandt.cpp algorithms/orb_matcher/stereo_rig.cpp
-  algorithms/orb_matcher/stereo_matcher.cpp algorithms/orb_matcher/rig_from_calib.cpp
+  types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp types/camera/rig_from_calib.cpp
+  algorithms/orb_matcher/stereo_matcher.cpp
   algorithms/orb_matcher/core/bearing.cpp algorithms/orb_matcher/core/subpixel.cpp)
 target_include_directories(orb_matcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(orb_matcher_core PUBLIC Eigen3::Eigen opencv_core fw::core)
@@ -74,6 +74,21 @@ if(BUILD_TESTING)
   add_test(NAME orb_matcher_epipolar_test COMMAND orb_matcher_epipolar_test --trials 50)
   add_test(NAME orb_matcher_subpixel_test COMMAND orb_matcher_subpixel_test --trials 10)
 endif()
+
+# types/ tests (not installed): build/orb_slam3_fw/types_<name>_test
+#   so3             types/geometry/so3.hpp: exp/log vs AngleAxis, Jacobians vs numerical, ORB-SLAM3 formulas
+#   preintegration  types/imu/preintegrated + imu_preintegration's interval vs tests/fixtures/orb_slam3/preintegration
+set(types_so3_test_SOURCES)
+set(types_preintegration_test_SOURCES types/imu/preintegrated.cpp)
+foreach(t so3 preintegration)
+  add_executable(types_${t}_test tests/types/${t}_test.cpp ${types_${t}_test_SOURCES})
+  target_include_directories(types_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(types_${t}_test PRIVATE ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3")
+  target_link_libraries(types_${t}_test Eigen3::Eigen fw::core)
+  if(BUILD_TESTING)
+    add_test(NAME types_${t}_test COMMAND types_${t}_test)
+  endif()
+endforeach()
 
 # orb_extractor: no fused multiply-add, so the Harris responses and BRIEF rotations round exactly as
 # the GPU version's `precise` arithmetic (same keypoints and descriptors).

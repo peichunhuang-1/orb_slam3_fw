@@ -15,7 +15,7 @@
 #include <Eigen/Dense>
 #include <opencv2/core/types.hpp>
 
-#include "algorithms/orb_matcher/core/hamming.hpp"
+#include "types/orb/hamming.hpp"
 #include "algorithms/orb_matcher/stereo_matcher.hpp"
 
 namespace orb_matcher {
@@ -26,19 +26,19 @@ struct BaselineMatches {
     int desc_matches = 0, matched = 0;
 };
 
-inline void orbslam3FisheyeMatches(const StereoRig& rig, const ViewFeatures& L, const ViewFeatures& R,
+inline void orbslam3FisheyeMatches(const camera::StereoRig& rig, const ViewFeatures& L, const ViewFeatures& R,
                                    const std::vector<float>& scale_factors, BaselineMatches& out) {
     out.left_to_right.assign(L.n, -1);
     out.depth.assign(L.n, -1.f);
     out.desc_matches = out.matched = 0;
-    const KannalaBrandt8& c1 = rig.camera(0);
-    const KannalaBrandt8& c2 = rig.camera(1);
+    const camera::KannalaBrandt8& c1 = rig.camera(0);
+    const camera::KannalaBrandt8& c2 = rig.camera(1);
     const Eigen::Matrix3f R12 = rig.R_12(), R21 = R12.transpose();
     const Eigen::Vector3f t12 = rig.t_12(), t21 = -R21 * t12;
     Eigen::Matrix<float, 3, 4> T1, T2;
     T1 << Eigen::Matrix3f::Identity(), Eigen::Vector3f::Zero();
     T2 << R21, t21;
-    auto zRay = [](const KannalaBrandt8& c, const cv::KeyPoint& k, Eigen::Vector3f& r) {
+    auto zRay = [](const camera::KannalaBrandt8& c, const cv::KeyPoint& k, Eigen::Vector3f& r) {
         Eigen::Vector3f f;
         if (!c.unproject(Eigen::Vector2f(k.pt.x, k.pt.y), f) || f.z() <= 1e-6f) return false;
         r = f / f.z();   // ORB-SLAM3's unprojectEig: z = 1
@@ -48,7 +48,7 @@ inline void orbslam3FisheyeMatches(const StereoRig& rig, const ViewFeatures& L, 
         const uint8_t* dl = L.descriptors + size_t(i) * L.stride;
         int b1 = 1 << 30, b2 = 1 << 30, j1 = -1;
         for (int j = 0; j < R.n; ++j) {
-            const int d = hamming256(dl, R.descriptors + size_t(j) * R.stride);
+            const int d = orb::hamming256(dl, R.descriptors + size_t(j) * R.stride);
             if (d < b1) { b2 = b1; b1 = d; j1 = j; }
             else if (d < b2) b2 = d;
         }

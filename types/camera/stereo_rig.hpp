@@ -5,9 +5,9 @@
 
 #include <Eigen/Core>
 
-#include "algorithms/orb_matcher/kannala_brandt.hpp"
+#include "types/camera/kannala_brandt.hpp"
 
-namespace orb_matcher {
+namespace camera {
 
 class StereoRig {
 public:
@@ -34,4 +34,4 @@ private:
     Eigen::Vector3f t_12_ = Eigen::Vector3f::Zero();
 };
 
-}  // namespace orb_matcher
+}  // namespace camera

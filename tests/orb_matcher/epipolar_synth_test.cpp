@@ -77,13 +77,13 @@ static std::vector<float> scaleFactors() {
     return s;
 }
 
-static Scene makeScene(const StereoRig& rig, const SceneConfig& sc, std::mt19937& rng) {
+static Scene makeScene(const camera::StereoRig& rig, const SceneConfig& sc, std::mt19937& rng) {
     const std::vector<float> scale = scaleFactors();
     std::uniform_real_distribution<float> uni(0, 1);
     std::normal_distribution<float> gauss(0, 1);
     const int W = rig.width(), H = rig.height(), border = 19;
-    const KannalaBrandt8& c1 = rig.camera(0);
-    const KannalaBrandt8& c2 = rig.camera(1);
+    const camera::KannalaBrandt8& c1 = rig.camera(0);
+    const camera::KannalaBrandt8& c2 = rig.camera(1);
     const Eigen::Matrix3f R21 = rig.R_12().transpose();
     // ORB-like level distribution: weight 1.2^(-2l)
     std::vector<float> w(kLevels);
@@ -259,7 +259,7 @@ static StereoMatcherParams noImages() {
     return p;
 }
 
-static Result runScenario(const char* name, const StereoRig& rig, const SceneConfig& sc, int trials, unsigned seed,
+static Result runScenario(const char* name, const camera::StereoRig& rig, const SceneConfig& sc, int trials, unsigned seed,
                           const StereoMatcherParams& params = noImages(), bool quiet = false) {
     std::mt19937 rng(seed);
     StereoMatcher matcher(rig, params, 1000);
@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i)
         if (std::string(argv[i]) == "--trials") trials = std::max(1, atoi(argv[++i]));
 
-    struct NamedRig { const char* name; StereoRig rig; };
+    struct NamedRig { const char* name; camera::StereoRig rig; };
     const NamedRig rigs[2] = {{"target rig (720x540, B 5 cm)", targetRig()}, {"EuRoC rig (752x480, B 11 cm)", eurocRig()}};
     for (const NamedRig& nr : rigs) {
         printf("%s, %d trials per scenario\n", nr.name, trials);
@@ -324,7 +324,7 @@ int main(int argc, char** argv) {
 
     printf("allocation, arguments\n");
     {
-        const StereoRig rig = targetRig();
+        const camera::StereoRig rig = targetRig();
         std::mt19937 rng(9);
         StereoMatcher m(rig, noImages(), 1000);
         StereoMatches out;

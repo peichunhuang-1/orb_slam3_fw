@@ -28,7 +28,7 @@
 #include <string>
 #include <vector>
 
-#include "algorithms/orb_matcher/rig_from_calib.hpp"
+#include "types/camera/rig_from_calib.hpp"
 #include "algorithms/orb_matcher/stereo_matcher.hpp"
 #ifdef ORB_HAVE_VULKAN
 #include "algorithms/orb_matcher/gpu/subpixel_vk.hpp"
@@ -86,7 +86,7 @@ struct OrbMatcher {
     // calibration
     bool have_rig = false;
     fw::Time calib_stamp{};
-    orb_matcher::StereoRig rig_calib;    // at the calibration's image size
+    camera::StereoRig rig_calib;    // at the calibration's image size
     std::string model_note;              // how the cameras became KB8
     bool fit_poor = false;
     std::string fit_poor_msg;
@@ -128,9 +128,9 @@ struct OrbMatcher {
 
     void update_calib(fw::Context& ctx, const Msg<calib::StereoImuRig>& cal, double max_fit_px) {
         if (have_rig && cal.stamp() == calib_stamp) return;
-        orb_matcher::ModelFit fl, fr;
+        camera::ModelFit fl, fr;
         try {
-            rig_calib = orb_matcher::stereoRigFromCalib(*cal, &fl, &fr);
+            rig_calib = camera::stereoRigFromCalib(*cal, &fl, &fr);
         } catch (const std::exception& e) {
             report(ctx, fw::Health::error, std::string("calibration: ") + e.what());
             throw;
@@ -208,7 +208,7 @@ struct OrbMatcher {
         if (no_pyramids) want.subpixel = false;   // match without the refinement rather than not at all
 
         if (!matcher || w != width || h != height || !same(want, mp)) {
-            const orb_matcher::StereoRig rig =
+            const camera::StereoRig rig =
                 (w == rig_calib.width() && h == rig_calib.height()) ? rig_calib : rig_calib.resized(w, h);
             matcher = std::make_unique<orb_matcher::StereoMatcher>(
                 rig, want, int(std::max(left.keypoints.size(), right.keypoints.size())));

@@ -1,4 +1,4 @@
-// kb8_test: KB8 camera model (KannalaBrandt8) and stereo rig (StereoRig).
+// kb8_test: KB8 camera model (camera::KannalaBrandt8) and stereo rig (camera::StereoRig).
 //
 //   kb8_test
 //
@@ -8,7 +8,7 @@
 // 4. pixels_per_radian against measured pixel motion per radian
 // 5. valid range (max_theta) for a lens whose r(θ) turns back
 // 6. resized(): 2x downscale maps pixels as (u + 0.5) / 2 − 0.5; aspect change rejected
-// 7. stereoRigFromCalib (calib::StereoImuRig: radtan -> KB8 fit, extrinsics) and its errors
+// 7. camera::stereoRigFromCalib (calib::StereoImuRig: radtan -> KB8 fit, extrinsics) and its errors
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -21,13 +21,13 @@
 
 #include <Eigen/Geometry>
 
-#include "algorithms/orb_matcher/kannala_brandt.hpp"
-#include "algorithms/orb_matcher/stereo_rig.hpp"
-#include "algorithms/orb_matcher/rig_from_calib.hpp"
+#include "types/camera/kannala_brandt.hpp"
+#include "types/camera/stereo_rig.hpp"
+#include "types/camera/rig_from_calib.hpp"
 
-using orb_matcher::KannalaBrandt8;
-using orb_matcher::StereoRig;
-using orb_matcher::stereoRigFromCalib;
+using camera::KannalaBrandt8;
+using camera::StereoRig;
+using camera::stereoRigFromCalib;
 
 static int failures = 0;
 static void check(bool ok, const char* what) {
@@ -88,7 +88,7 @@ struct TestCamera {
     float P[8];         // fx fy cx cy k1 k2 k3 k4
     int width, height;
     double thetaTest;   // largest ray angle used in the tests
-    KannalaBrandt8 cam;
+    camera::KannalaBrandt8 cam;
     TestCamera(const char* n, const float (&p)[8], int w, int h, double thetaDeg)
         : name(n), width(w), height(h), thetaTest(thetaDeg * M_PI / 180),
           cam(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], w, h) {
@@ -97,7 +97,7 @@ struct TestCamera {
 };
 
 static void testCamera(const TestCamera& tc) {
-    const KannalaBrandt8& cam = tc.cam;
+    const camera::KannalaBrandt8& cam = tc.cam;
     printf("%s (%dx%d, max_theta %.1f deg)\n", tc.name, cam.width(), cam.height(), cam.max_theta() * 180 / M_PI);
     std::mt19937 rng(1);
     std::uniform_real_distribution<double> uni(0, 1);
@@ -208,7 +208,7 @@ int main() {
     printf("valid range and arguments\n");
     {
         // r(θ) = θ − 0.3 θ³ turns back at r'(θ) = 1 − 0.9 θ² = 0, θ = 1.0541
-        const KannalaBrandt8 bent(300, 300, 320, 240, -0.3f, 0, 0, 0, 640, 480);
+        const camera::KannalaBrandt8 bent(300, 300, 320, 240, -0.3f, 0, 0, 0, 640, 480);
         check(std::abs(bent.max_theta() - 1.0541f) < 2e-3f, "max_theta where r(θ) turns back");
         Eigen::Vector2f uv;
         Eigen::Vector3f f;
@@ -216,16 +216,16 @@ int main() {
         check(!bent.project(bearingAt(1.2, 0.3), uv), "ray beyond max_theta rejected");
         check(!bent.unproject(Eigen::Vector2f(320 + 300 * 0.71f, 240), f), "pixel beyond r(max_theta) rejected");
         check(bent.unproject(Eigen::Vector2f(320 + 300 * 0.69f, 240), f), "pixel inside r(max_theta) unprojects");
-        check(throws<std::invalid_argument>([] { KannalaBrandt8(0, 300, 320, 240, 0, 0, 0, 0, 640, 480); }),
+        check(throws<std::invalid_argument>([] { camera::KannalaBrandt8(0, 300, 320, 240, 0, 0, 0, 0, 640, 480); }),
               "fx = 0 rejected");
-        check(throws<std::invalid_argument>([] { KannalaBrandt8(300, 300, 320, 240, 0, 0, 0, 0, 0, 480); }),
+        check(throws<std::invalid_argument>([] { camera::KannalaBrandt8(300, 300, 320, 240, 0, 0, 0, 0, 0, 480); }),
               "width = 0 rejected");
     }
 
     printf("resized\n");
     {
-        const KannalaBrandt8 full(640.f, 641.5f, 703.2f, 551.7f, -0.012f, 0.004f, -0.0008f, 0.00005f, 1440, 1080);
-        const KannalaBrandt8 half = full.resized(720, 540);
+        const camera::KannalaBrandt8 full(640.f, 641.5f, 703.2f, 551.7f, -0.012f, 0.004f, -0.0008f, 0.00005f, 1440, 1080);
+        const camera::KannalaBrandt8 half = full.resized(720, 540);
         check(half.width() == 720 && half.height() == 540, "size");
         check(std::abs(half.fx() - 320.f) < 1e-4f && std::abs(half.fy() - 320.75f) < 1e-4f, "fx, fy halved");
         check(std::abs(half.cx() - ((703.2f + 0.5f) / 2 - 0.5f)) < 1e-4f &&
@@ -244,30 +244,30 @@ int main() {
         char msg[128];
         snprintf(msg, sizeof msg, "half-res pixel = (full-res pixel + 0.5) / 2 − 0.5, max %.2g px", maxPx);
         check(maxPx < 1e-3, msg);
-        const KannalaBrandt8 back = half.resized(1440, 1080);
+        const camera::KannalaBrandt8 back = half.resized(1440, 1080);
         check(std::abs(back.cx() - full.cx()) < 1e-3f && std::abs(back.fx() - full.fx()) < 1e-3f,
               "resized back to full size");
         check(throws<std::invalid_argument>([&] { full.resized(720, 600); }), "aspect ratio change rejected");
     }
 
-    printf("StereoRig\n");
+    printf("camera::StereoRig\n");
     {
         const Eigen::Matrix3f R = Eigen::AngleAxisf(0.01f, Eigen::Vector3f(0.3f, 1.f, -0.2f).normalized()).matrix();
         const Eigen::Vector3f t(0.05f, 0.0002f, -0.0003f);
-        const KannalaBrandt8 l(640.f, 641.5f, 719.5f, 539.5f, -0.012f, 0.004f, -0.0008f, 0.00005f, 1440, 1080);
-        const KannalaBrandt8 r(645.f, 644.f, 721.f, 541.f, -0.011f, 0.0035f, -0.0007f, 0.00004f, 1440, 1080);
-        const StereoRig rig(l, r, R, t);
+        const camera::KannalaBrandt8 l(640.f, 641.5f, 719.5f, 539.5f, -0.012f, 0.004f, -0.0008f, 0.00005f, 1440, 1080);
+        const camera::KannalaBrandt8 r(645.f, 644.f, 721.f, 541.f, -0.011f, 0.0035f, -0.0007f, 0.00004f, 1440, 1080);
+        const camera::StereoRig rig(l, r, R, t);
         check(rig.width() == 1440 && rig.height() == 1080, "image size");
         check((rig.R_12() - R).norm() < 1e-6f && (rig.t_12() - t).norm() < 1e-7f, "R_12, t_12");
         check(std::abs(rig.baseline() - t.norm()) < 1e-7f, "baseline");
-        const StereoRig half = rig.resized(720, 540);
+        const camera::StereoRig half = rig.resized(720, 540);
         check(half.width() == 720 && std::abs(half.camera(1).fx() - 322.5f) < 1e-4f &&
               (half.t_12() - t).norm() == 0, "resized rig");
-        check(throws<std::invalid_argument>([&] { StereoRig(l, r, 1.1f * R, t); }), "non-rotation rejected");
-        check(throws<std::invalid_argument>([&] { StereoRig(l, r, R, Eigen::Vector3f::Zero()); }), "zero baseline rejected");
+        check(throws<std::invalid_argument>([&] { camera::StereoRig(l, r, 1.1f * R, t); }), "non-rotation rejected");
+        check(throws<std::invalid_argument>([&] { camera::StereoRig(l, r, R, Eigen::Vector3f::Zero()); }), "zero baseline rejected");
     }
 
-    printf("stereoRigFromCalib (calib::StereoImuRig)\n");
+    printf("camera::stereoRigFromCalib (calib::StereoImuRig)\n");
     {
         // EuRoC MAV cam0 / cam1 (sensor.yaml), as euroc_mcap_driver sends them
         auto euroc = [] {
@@ -287,8 +287,8 @@ int main() {
             c.T_body_right.matrix() = T1;
             return c;
         };
-        orb_matcher::ModelFit f0, f1;
-        const StereoRig rig = stereoRigFromCalib(euroc(), &f0, &f1);
+        camera::ModelFit f0, f1;
+        const camera::StereoRig rig = camera::stereoRigFromCalib(euroc(), &f0, &f1);
         char msg[160];
         snprintf(msg, sizeof msg, "KB8 fit to radtan: rms %.3f / %.3f px, p99 %.3f / %.3f px", f0.rms_px, f1.rms_px,
                  f0.p99_px, f1.p99_px);
@@ -307,28 +307,28 @@ int main() {
         kb.left.distortion_model = kb.right.distortion_model = "equidistant";
         kb.left.d = {0.01, 0.02, 0.03, 0.04};
         kb.right.d = {0.01, 0.02, 0.03, 0.04};
-        orb_matcher::ModelFit fk;
-        const StereoRig kbr = stereoRigFromCalib(kb, &fk);
+        camera::ModelFit fk;
+        const camera::StereoRig kbr = camera::stereoRigFromCalib(kb, &fk);
         check(!fk.fitted && kbr.camera(0).k(2) == 0.03f && kbr.camera(1).fx() == 457.587f, "equidistant taken as is");
 
         calib::StereoImuRig bad = euroc();
         bad.right.distortion_model = "rational_polynomial";
-        check(throws<std::invalid_argument>([&] { stereoRigFromCalib(bad); }), "unknown distortion model rejected");
+        check(throws<std::invalid_argument>([&] { camera::stereoRigFromCalib(bad); }), "unknown distortion model rejected");
         bad = euroc();
         bad.left.d.resize(3);
-        check(throws<std::invalid_argument>([&] { stereoRigFromCalib(bad); }), "missing coefficients rejected");
+        check(throws<std::invalid_argument>([&] { camera::stereoRigFromCalib(bad); }), "missing coefficients rejected");
         bad = euroc();
         bad.right.width = 640;
-        check(throws<std::invalid_argument>([&] { stereoRigFromCalib(bad); }), "different image sizes rejected");
+        check(throws<std::invalid_argument>([&] { camera::stereoRigFromCalib(bad); }), "different image sizes rejected");
         bad = euroc();
         bad.T_body_right = bad.T_body_left;
-        check(throws<std::invalid_argument>([&] { stereoRigFromCalib(bad); }), "zero baseline rejected");
+        check(throws<std::invalid_argument>([&] { camera::stereoRigFromCalib(bad); }), "zero baseline rejected");
         calib::StereoImuRig pin = euroc();
         pin.left.distortion_model = pin.right.distortion_model = "none";
         pin.left.d.clear();
         pin.right.d.clear();
-        orb_matcher::ModelFit fp;
-        stereoRigFromCalib(pin, &fp);
+        camera::ModelFit fp;
+        camera::stereoRigFromCalib(pin, &fp);
         snprintf(msg, sizeof msg, "no distortion: KB8 fit to the pinhole, p99 %.3f px", fp.p99_px);
         check(fp.fitted && fp.p99_px < 0.5, msg);
     }

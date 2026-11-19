@@ -12,7 +12,7 @@
 // keypoint once per frame).
 #include <Eigen/Core>
 
-namespace orb_matcher {
+namespace camera {
 
 class KannalaBrandt8 {
 public:
@@ -58,4 +58,4 @@ private:
     double theta_max_ = 0, r_max_ = 0;   // r(θ) increasing on [0, theta_max_]
 };
 
-}  // namespace orb_matcher
+}  // namespace camera

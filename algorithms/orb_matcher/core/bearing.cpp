@@ -15,7 +15,7 @@ void BearingSet::reserve(int n) {
     valid.reserve(n);
 }
 
-void computeBearings(const KannalaBrandt8& cam, const Eigen::Matrix3f& R_rc, const cv::KeyPoint* kp, int n,
+void computeBearings(const camera::KannalaBrandt8& cam, const Eigen::Matrix3f& R_rc, const cv::KeyPoint* kp, int n,
                      const std::vector<float>& scale_factors, float sigma_px, float sin_phi_min, BearingSet& out) {
     out.f.resize(n);
     out.theta.resize(n);

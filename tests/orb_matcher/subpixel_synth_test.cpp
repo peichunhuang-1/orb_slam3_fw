@@ -94,8 +94,8 @@ struct Plane {
 };
 
 // Each pixel averages ss x ss samples over its area (a sensor integrates; ss = 1 point-samples).
-static cv::Mat render(const StereoRig& rig, int cam, const Plane& pl, const cv::Mat& tex, int ss) {
-    const KannalaBrandt8& c = rig.camera(cam);
+static cv::Mat render(const camera::StereoRig& rig, int cam, const Plane& pl, const cv::Mat& tex, int ss) {
+    const camera::KannalaBrandt8& c = rig.camera(cam);
     cv::Mat img(c.height(), c.width(), CV_8U);
     const Eigen::Vector3f origin = cam ? rig.t_12() : Eigen::Vector3f::Zero();
     for (int v = 0; v < img.rows; ++v)
@@ -139,7 +139,7 @@ static const Mode kModes[] = {{"off", false, SubpixelFit::SadParabola},
 static const int kNumModes = 4;
 
 // Returns the tallies of every mode.
-static std::vector<Tally> runRig(const char* name, const StereoRig& rig, int trials, unsigned seed, int ss) {
+static std::vector<Tally> runRig(const char* name, const camera::StereoRig& rig, int trials, unsigned seed, int ss) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<float> uni(0, 1);
     std::vector<float> scale(kLevels);
@@ -147,8 +147,8 @@ static std::vector<Tally> runRig(const char* name, const StereoRig& rig, int tri
     std::vector<float> w(kLevels);
     for (int l = 0; l < kLevels; ++l) w[l] = std::pow(1.2f, -2.f * l);
     std::discrete_distribution<int> levelDist(w.begin(), w.end());
-    const KannalaBrandt8& c1 = rig.camera(0);
-    const KannalaBrandt8& c2 = rig.camera(1);
+    const camera::KannalaBrandt8& c1 = rig.camera(0);
+    const camera::KannalaBrandt8& c2 = rig.camera(1);
     const Eigen::Matrix3f R21 = rig.R_12().transpose();
     const float fB = c1.fx() * rig.baseline();
 
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]) == "--trials") trials = std::max(1, atoi(argv[++i]));
         else if (std::string(argv[i]) == "--supersample") ss = std::max(1, atoi(argv[++i]));
     }
-    const StereoRig rigs[2] = {targetRig(), eurocRig()};
+    const camera::StereoRig rigs[2] = {targetRig(), eurocRig()};
     const char* names[2] = {"target rig (720x540, B 5 cm)", "EuRoC rig (752x480, B 11 cm)"};
     const int def = int(StereoMatcherParams().subpixel_fit) + 1;   // the default fit's mode
     for (int r = 0; r < 2; ++r) {

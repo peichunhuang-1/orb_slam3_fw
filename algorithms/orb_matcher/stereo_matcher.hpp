@@ -21,7 +21,7 @@
 #include <Eigen/Core>
 #include <opencv2/core/types.hpp>
 
-#include "algorithms/orb_matcher/stereo_rig.hpp"
+#include "types/camera/stereo_rig.hpp"
 
 namespace orb_matcher {
 
@@ -116,7 +116,7 @@ public:
 class StereoMatcher {
 public:
     // Throws std::invalid_argument for invalid parameters.
-    StereoMatcher(const StereoRig& rig, const StereoMatcherParams& params = StereoMatcherParams(),
+    StereoMatcher(const camera::StereoRig& rig, const StereoMatcherParams& params = StereoMatcherParams(),
                   int max_features = 1000);
     ~StereoMatcher();
     StereoMatcher(const StereoMatcher&) = delete;
@@ -132,7 +132,7 @@ public:
     // with 720 keypoints would match nothing and fail silently).
     void check_image_size(int width, int height) const;
 
-    const StereoRig& rig() const;
+    const camera::StereoRig& rig() const;
     const StereoMatcherParams& params() const;
 
 private:
