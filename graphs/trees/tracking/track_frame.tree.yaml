@@ -1,0 +1,33 @@
+# Tracking::Track() after the discontinuity checks: initialize, or track an initialized map; then the
+# trajectory entry and the per-frame outputs.
+version: 1
+inputs:
+  inertial: { type: fw/bool }
+  params:   { type: OrbTrackingParams }
+  mapper:   { type: tracking/MapperStatus }
+outputs:
+  state:      { type: tracking/State }
+  pose:       { type: fw/PoseStamped }
+  tracking:   { type: tracking/Status }
+  keyframe:   { type: map/KeyFrameRef }
+  mapper_cmd: { type: tracking/MapperCommand }
+resources:   # the parent's of the same name
+  atlas:      { type: map/Atlas }
+  tracker:    { type: tracking/Tracker }
+  vocabulary: { type: map/Vocabulary }
+root:
+  Sequence:
+    children:
+      # NO_IMAGES_YET -> NOT_INITIALIZED, SetNewBias (frame.imu by its bias Jacobians), the IMU since the last
+      # keyframe (concatenation), map change index
+      - begin_frame: { state: "{state}" }
+      - IfThenElse:
+          children:
+            - state_is: { state: "{state}", value: NOT_INITIALIZED }
+            - SubTree: { tree: trees/tracking/initialize.tree.yaml, name: initialize,
+                         state: "{state}", keyframe: "{keyframe}" }
+            - SubTree: { tree: trees/tracking/track.tree.yaml, name: track, inertial: "{inertial}",
+                         params: "{params}", mapper: "{mapper}", state: "{state}",
+                         keyframe: "{keyframe}", mapper_cmd: "{mapper_cmd}" }
+      # mlRelativeFramePoses... (OK / RECENTLY_LOST), pose and status out
+      - publish_frame: { state: "{state}", pose: "{pose}", tracking: "{tracking}" }

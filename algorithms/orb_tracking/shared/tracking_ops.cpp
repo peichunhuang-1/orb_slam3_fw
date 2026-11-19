@@ -1,0 +1,161 @@
+#include "algorithms/orb_tracking/shared/tracking_ops.hpp"
+
+#include <stdexcept>
+
+#include "types/geometry/so3.hpp"
+#include "types/map/atlas_ops.hpp"
+
+namespace orb_tracking {
+
+int keyFramesInMap(const map::Atlas& a) {
+    const map::Map* m = a.findMap(a.current);
+    return m ? int(m->keyframes.size()) : 0;
+}
+
+bool imuInitialized(const map::Atlas& a) {
+    const map::Map* m = a.findMap(a.current);
+    return m && m->imu_initialized;
+}
+
+bool inertialBA2(const map::Atlas& a) {
+    const map::Map* m = a.findMap(a.current);
+    return m && m->imu_ba2;
+}
+
+const tracking::MapperStatus& mapperOf(const fw::Optional<const tracking::MapperStatus&>& m) {
+    static const tracking::MapperStatus idle;
+    return m.has_value() ? *m : idle;
+}
+
+void requestResetActiveMap(tracking::Tracker& t) {
+    if (t.pending_reset == tracking::PendingReset::none) t.pending_reset = tracking::PendingReset::active_map;
+}
+
+void createMapInAtlas(map::Atlas& a, tracking::Tracker& t, tracking::State& state) {
+    t.last_init_frame_id = t.current.id;
+    map::createNewMap(a);
+    if (t.inertial) a.currentMap().inertial = true;  // SetInertialSensor
+    t.initial_frame_id = t.current.id + 1;
+    state = tracking::State::NO_IMAGES_YET;
+    t.has_velocity = false;
+    t.vo = false;
+    if (t.inertial && t.preintegrated_from_kf) t.preintegrated_from_kf = newPreintegration(t, imu::Bias());
+    t.last_keyframe = map::kNone;
+    t.reference_kf = map::kNone;
+    t.last = tracking::Frame();
+    t.current = tracking::Frame();
+    t.created_map = true;
+}
+
+std::shared_ptr<imu::Preintegrated> newPreintegration(const tracking::Tracker& t, const imu::Bias& b) {
+    auto p = std::make_shared<imu::Preintegrated>(imu::Bias(), t.imu_noise);
+    p->setNewBias(b);
+    return p;
+}
+
+namespace {
+
+constexpr float kGravity = 9.81f;  // IMU::GRAVITY_VALUE
+
+// Rwb2, twb2, vwb2 from (Rwb1, twb1, vwb1) and a preintegration's deltas at bias b
+void predict(const Eigen::Matrix3f& Rwb1, const Eigen::Vector3f& twb1, const Eigen::Vector3f& Vwb1,
+             const imu::Preintegrated& p, const imu::Bias& b, tracking::Frame& f) {
+    const Eigen::Vector3f Gz(0, 0, -kGravity);
+    const float t12 = p.dT;
+    const Eigen::Matrix3f Rwb2 = geometry::normalizeRotation(Eigen::Matrix3f(Rwb1 * p.deltaRotation(b)));
+    const Eigen::Vector3f twb2 = twb1 + Vwb1 * t12 + 0.5f * t12 * t12 * Gz + Rwb1 * p.deltaPosition(b);
+    const Eigen::Vector3f Vwb2 = Vwb1 + t12 * Gz + Rwb1 * p.deltaVelocity(b);
+    f.setImuPoseVelocity(Rwb2, twb2, Vwb2);
+}
+
+}  // namespace
+
+bool predictStateImu(const map::Atlas& a, tracking::Tracker& t) {
+    tracking::Frame& cur = t.current;
+    if (!t.inertial) return false;  // mpPrevFrame: set for inertial frames only (the tracker's last frame)
+    const map::KeyFrame* kf = a.keyframe(t.last_keyframe);
+    if (t.map_updated && kf) {
+        if (!t.preintegrated_from_kf) return false;
+        predict(kf->imuRotation(), kf->imuPosition(), kf->velocity(), *t.preintegrated_from_kf, kf->bias, cur);
+        cur.bias = kf->bias;
+        return true;
+    }
+    if (!t.map_updated) {
+        if (!cur.preintegrated_frame) return false;
+        predict(t.last.imuRotation(), t.last.imuPosition(), t.last.velocity(), *cur.preintegrated_frame, t.last.bias, cur);
+        cur.bias = t.last.bias;
+        return true;
+    }
+    return false;
+}
+
+tracking::PointScratch& pointScratch(tracking::Tracker& t, map::MapPointId p) {
+    if (p >= t.point_scratch.size()) t.point_scratch.resize(std::size_t(p) + 1);
+    return t.point_scratch[std::size_t(p)];
+}
+
+tracking::RelocScratch& relocScratch(tracking::Tracker& t, map::KeyFrameId k) {
+    if (k >= t.reloc.size()) t.reloc.resize(std::size_t(k) + 1);
+    return t.reloc[std::size_t(k)];
+}
+
+int discardPoseOutliers(const map::Atlas& a, tracking::Tracker& t, int& nmatches, OutlierRule rule) {
+    tracking::Frame& f = t.current;
+    int nmatches_map = 0;
+    for (std::size_t i = 0; i < f.points.size(); ++i) {
+        const map::MapPointId id = f.points[i];
+        if (id == map::kNone) continue;
+        if (f.outlier[i]) {
+            f.points[i] = map::kNone;
+            f.outlier[i] = false;
+            tracking::PointScratch& s = pointScratch(t, id);
+            if (int(i) < f.nLeft()) s.in_view = false;
+            else s.in_view_r = false;
+            if (rule == OutlierRule::reference_keyframe) s.in_view = false;
+            s.last_frame_seen = f.id;
+            --nmatches;
+        } else if (const map::MapPoint* p = a.point(id); p && p->n_obs > 0) {
+            ++nmatches_map;
+        }
+    }
+    return nmatches_map;
+}
+
+std::vector<const Eigen::Vector3f*> worldPositions(const map::Atlas& a, const std::vector<map::MapPointId>& points,
+                                                   bool good_only) {
+    std::vector<const Eigen::Vector3f*> w(points.size(), nullptr);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const map::MapPoint* p = good_only ? a.goodPoint(points[i]) : a.point(points[i]);
+        if (p) w[i] = &p->pos;
+    }
+    return w;
+}
+
+const camera::StereoRig& rigOf(const map::Atlas& a, const tracking::Frame& f) {
+    if (f.rig < 0 || std::size_t(f.rig) >= a.rigs.size()) throw std::logic_error("orb_tracking: the frame has no rig");
+    return a.rigs[std::size_t(f.rig)];
+}
+
+map::KeyFrame keyFrameOf(const tracking::Frame& f) {
+    map::KeyFrame kf;
+    kf.frame_id = f.id;
+    kf.timestamp = f.timestamp;
+    kf.features = f.features;
+    kf.rig = f.rig;
+    kf.Tlr = f.Tlr;
+    kf.Trl = f.Trl;
+    kf.baseline = f.baseline;
+    kf.th_depth = f.th_depth;
+    kf.bow = f.bow;
+    kf.feat = f.feat;
+    kf.points = f.points;
+    kf.has_imu_calib = f.has_imu_calib;
+    kf.T_cb = f.T_cb;
+    kf.preintegrated = f.preintegrated;
+    if (f.hasVelocity()) kf.setVelocity(f.velocity());
+    kf.bias = f.bias;
+    kf.setPose(f.pose());
+    return kf;
+}
+
+}  // namespace orb_tracking

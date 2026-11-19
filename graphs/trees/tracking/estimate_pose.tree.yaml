@@ -1,0 +1,47 @@
+# The first pose estimate of an initialized map (Track(), "Initial camera pose estimation"). SUCCESS = bOK.
+version: 1
+inputs:
+  inertial: { type: fw/bool }
+outputs:
+  state: { type: tracking/State }
+resources:   # the parent's of the same name
+  atlas:      { type: map/Atlas }
+  tracker:    { type: tracking/Tracker }
+  vocabulary: { type: map/Vocabulary }
+root:
+  IfThenElse:
+    children:
+      - state_is: { state: "{state}", value: OK }
+      # OK: motion model, else the reference keyframe (BoW)
+      - Fallback:
+          children:
+            - Sequence:
+                children:
+                  - check_replaced_in_last_frame: {}
+                  - IfThenElse:
+                      children:
+                        # no velocity and no IMU initialization, or just relocalized
+                        - use_reference_keyframe: {}
+                        - track_reference_keyframe: {}
+                        - Fallback:
+                            children:
+                              - track_with_motion_model: {}
+                              - track_reference_keyframe: {}
+            # OK -> RECENTLY_LOST (> 10 keyframes) or LOST; the estimate stays failed
+            - ForceFailure:
+                child: { lost_after_pose_failure: { state: "{state}" } }
+      # RECENTLY_LOST
+      - IfThenElse:
+          children:
+            - is_true: { value: "{inertial}" }
+            # inertial: predict from the IMU for up to 5 s
+            - Sequence:
+                children:
+                  - lost_time_within: { state: "{state}", max_s: 5.0 }     # over: state = LOST, FAILURE
+                  - predict_state_imu: {}                                 # FAILURE before IMU initialization
+            # stereo: relocalize; failing for over 3 s -> LOST
+            - Fallback:
+                children:
+                  - relocalize: {}
+                  - ForceFailure:
+                      child: { lost_time_within: { state: "{state}", max_s: 3.0 } }

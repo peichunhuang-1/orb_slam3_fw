@@ -1,0 +1,36 @@
+# ORB-SLAM3 tracking (KB8 stereo / stereo-inertial): one tick per stereo frame (System::TrackStereo + Tracking::Track).
+# The sensor: params.sensor. Stereo-inertial frames come from imu_preintegration, preintegrated (frame.imu).
+# Design: algorithms/orb_tracking/docs/DESIGN.md
+version: 1
+inputs:
+  frame:  { type: orb/StereoFrame, mode: trigger, queue: { depth: 8, policy: drop_oldest } }
+  calib:  { type: calib/StereoImuRig }              # latest
+  params: { type: OrbTrackingParams }               # latest
+  mapper: { type: tracking/MapperStatus }           # latest; local_mapping (not there yet: absent)
+outputs:
+  pose:       { type: fw/PoseStamped }              # body in world, per tracked frame
+  tracking:   { type: tracking/Status }             # per frame: state, inliers, map / keyframe counts
+  keyframe:   { type: map/KeyFrameRef }             # per new keyframe -> local_mapping (InsertKeyFrame)
+  mapper_cmd: { type: tracking/MapperCommand }      # reset active map / reset all / interrupt BA
+resources:
+  atlas:      { type: map/Atlas }                   # maps, keyframes, map points, cameras, keyframe database
+  tracker:    { type: tracking/Tracker }            # Tracking's members (frames, motion model, local map, IMU)
+  vocabulary: { type: map/Vocabulary }              # DBoW2 ORB vocabulary, read only
+blackboard:
+  state:    { type: tracking/State, init: NO_IMAGES_YET }   # Tracking::mState
+  inertial: { type: fw/bool, init: false }                  # System::IMU_STEREO, set by make_frame from params.sensor
+root:
+  Sequence:
+    children:
+      # System::TrackStereo, before Track()
+      - apply_pending_reset: { state: "{state}", mapper_cmd: "{mapper_cmd}" }
+      - make_frame: { frame: "{frame}", calib: "{calib}", params: "{params}", inertial: "{inertial}" }
+      - apply_mapper_update: { mapper: "{mapper}" }
+      # Track()
+      - IfThenElse:
+          children:
+            - frame_discontinuity: { state: "{state}", mapper: "{mapper}" }
+            - handle_discontinuity: { state: "{state}", mapper: "{mapper}" }
+            - SubTree: { tree: trees/tracking/track_frame.tree.yaml, name: track_frame, inertial: "{inertial}",
+                         params: "{params}", mapper: "{mapper}", state: "{state}", pose: "{pose}",
+                         tracking: "{tracking}", keyframe: "{keyframe}", mapper_cmd: "{mapper_cmd}" }

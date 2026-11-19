@@ -1,0 +1,16 @@
+# NOT_INITIALIZED: Tracking::StereoInitialization. Failed: keep the frame as the last one and wait for the next.
+version: 1
+outputs:
+  state:    { type: tracking/State }
+  keyframe: { type: map/KeyFrameRef }
+resources:   # the parent's of the same name
+  atlas:      { type: map/Atlas }
+  tracker:    { type: tracking/Tracker }
+  vocabulary: { type: map/Vocabulary }
+root:
+  Fallback:
+    children:
+      # > 500 keypoints (inertial: preintegrated, enough acceleration): first keyframe + its stereo
+      # points -> new map, state OK
+      - stereo_initialization: { state: "{state}", keyframe: "{keyframe}" }
+      - remember_last_frame: {}

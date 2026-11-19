@@ -18,6 +18,25 @@ namespace tracking {
 
 enum class PendingReset { none, active_map, all };  // System's mbResetActiveMap / mbReset
 
+// A keyframe's relocalization query scratch (KeyFrame::mnRelocQuery, mnRelocWords, mRelocScore). Kept across
+// queries as there: a candidate's neighbour may carry the score of an earlier query.
+struct RelocScratch {
+    long query = 0;
+    int words = 0;
+    float score = 0;
+};
+
+// A map point's projection in the current frame (MapPoint::mbTrackInView(R), mTrackProjX(R), mTrackProjY(R),
+// mnTrackScaleLevel(R), mTrackViewCos(R), mTrackDepth) and mnLastFrameSeen
+struct PointScratch {
+    long last_frame_seen = 0;
+    bool in_view = false, in_view_r = false;
+    float proj_x = 0, proj_y = 0, proj_xr = 0, proj_yr = 0;
+    int level = -1, level_r = -1;
+    float view_cos = 0, view_cos_r = 0;
+    float depth = 0;  // left camera, distance (norm)
+};
+
 struct Tracker {
     Frame current, last;  // mCurrentFrame, mLastFrame
     State last_processed_state = State::NO_IMAGES_YET;
@@ -67,6 +86,21 @@ struct Tracker {
     geometry::SE3f T_cb;
 
     PendingReset pending_reset = PendingReset::none;
+
+    // Settings of the current run (make_frame, from the params and the sensor): System::IMU_STEREO, mMaxFrames,
+    // mnFramesToResetIMU
+    bool inertial = false;
+    int max_frames = 20;
+    int frames_to_reset_imu = 20;
+
+    // Per map point, the projection scratch ORB-SLAM3 keeps on MapPoint (by point id; missing entries are its
+    // initial values). It persists across frames as there: a pose-estimation outlier is marked seen
+    // (mnLastFrameSeen) and not projected again in the local map, but keeps the view flags of the projection
+    // before, and the pose-inertial optimization reads mTrackDepth from the last projection.
+    std::vector<PointScratch> point_scratch;
+    std::vector<RelocScratch> reloc;  // by keyframe id
+
+    bool new_keyframe = false;  // a keyframe was made this frame (the status)
 };
 
 }  // namespace tracking

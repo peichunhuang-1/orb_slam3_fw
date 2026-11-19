@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "nodes": {
+    "clean_vo_matches": {
+      "x": 0,
+      "y": 544
+    },
+    "create_new_keyframe": {
+      "x": 0,
+      "y": 680
+    },
+    "discard_outliers": {
+      "x": 0,
+      "y": 748
+    },
+    "estimate_pose": {
+      "x": 300,
+      "y": 0
+    },
+    "finish_frame": {
+      "x": 0,
+      "y": 952
+    },
+    "handle_lost": {
+      "x": 0,
+      "y": 884
+    },
+    "imu_bias_bookkeeping": {
+      "x": 0,
+      "y": 340
+    },
+    "key:inertial": {
+      "x": 0,
+      "y": 1020
+    },
+    "key:keyframe": {
+      "x": 0,
+      "y": 1224
+    },
+    "key:mapper": {
+      "x": 0,
+      "y": 1156
+    },
+    "key:mapper_cmd": {
+      "x": 0,
+      "y": 1292
+    },
+    "key:ok": {
+      "x": 0,
+      "y": 1360
+    },
+    "key:params": {
+      "x": 0,
+      "y": 1088
+    },
+    "key:state": {
+      "x": 600,
+      "y": 0
+    },
+    "lost_at_end": {
+      "x": 0,
+      "y": 816
+    },
+    "lost_at_start": {
+      "x": 0,
+      "y": 0
+    },
+    "need_new_keyframe": {
+      "x": 0,
+      "y": 612
+    },
+    "resource:atlas": {
+      "x": 600,
+      "y": 68
+    },
+    "resource:tracker": {
+      "x": 600,
+      "y": 136
+    },
+    "resource:vocabulary": {
+      "x": 600,
+      "y": 204
+    },
+    "start_new_map": {
+      "x": 0,
+      "y": 68
+    },
+    "track_failed": {
+      "x": 0,
+      "y": 272
+    },
+    "track_local_map": {
+      "x": 0,
+      "y": 136
+    },
+    "tracked_or_recently_lost": {
+      "x": 0,
+      "y": 408
+    },
+    "tracking_ok": {
+      "x": 0,
+      "y": 204
+    },
+    "update_motion_model": {
+      "x": 0,
+      "y": 476
+    }
+  }
+}

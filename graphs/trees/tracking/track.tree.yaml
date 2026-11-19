@@ -1,0 +1,61 @@
+# An initialized map: Track()'s "else" branch. LOST at the start of the frame -> new map (or reset); else the pose
+# from the motion model / reference keyframe / relocalization / IMU, the local map, the keyframe decision.
+version: 1
+inputs:
+  inertial: { type: fw/bool }
+  params:   { type: OrbTrackingParams }
+  mapper:   { type: tracking/MapperStatus }
+outputs:
+  state:      { type: tracking/State }
+  keyframe:   { type: map/KeyFrameRef }
+  mapper_cmd: { type: tracking/MapperCommand }
+blackboard:
+  ok: { type: fw/bool, init: false }    # Track()'s bOK
+resources:   # the parent's of the same name
+  atlas:      { type: map/Atlas }
+  tracker:    { type: tracking/Tracker }
+  vocabulary: { type: map/Vocabulary }
+root:
+  IfThenElse:
+    children:
+      - state_is: { name: lost_at_start, state: "{state}", value: LOST }
+      # "A new map is started": ResetActiveMap (< 10 keyframes) or CreateMapInAtlas; nothing else this frame
+      - start_new_map: { state: "{state}" }
+      - Sequence:
+          children:
+            - Fallback:
+                name: tracked
+                children:
+                  - Sequence:
+                      children:
+                        - SubTree: { tree: trees/tracking/estimate_pose.tree.yaml, name: estimate_pose,
+                                     inertial: "{inertial}", state: "{state}" }
+                        - track_local_map: { state: "{state}", mapper: "{mapper}" }
+                        - tracking_ok: { state: "{state}", ok: "{ok}" }       # state = OK, bOK = true
+                  # bOK = false; OK -> RECENTLY_LOST (inertial: reset when the IMU is not / recently initialized)
+                  - track_failed: { state: "{state}", ok: "{ok}" }
+            # ResetFrameIMU at the relocalization + N frame, mLastBias
+            - imu_bias_bookkeeping: { ok: "{ok}" }
+            - IfThenElse:
+                children:
+                  - tracked_or_recently_lost: { ok: "{ok}", state: "{state}" }
+                  - Sequence:
+                      children:
+                        - update_motion_model: {}
+                        - clean_vo_matches: {}                     # + delete the temporal points
+                        - Fallback:
+                            children:
+                              - Sequence:
+                                  children:
+                                    - need_new_keyframe: { ok: "{ok}", state: "{state}", params: "{params}",
+                                                           mapper: "{mapper}", mapper_cmd: "{mapper_cmd}" }
+                                    - create_new_keyframe: { mapper: "{mapper}", keyframe: "{keyframe}" }
+                              - AlwaysSuccess: {}
+                        - discard_outliers: {}
+                  - AlwaysSuccess: {}
+            - IfThenElse:
+                children:
+                  - state_is: { name: lost_at_end, state: "{state}", value: LOST }
+                  # lost soon after initialization (<= 10 keyframes, inertial: before IMU init): reset; else new map
+                  - handle_lost: { state: "{state}" }
+                  - finish_frame: {}                               # reference keyframe, mLastFrame = current
