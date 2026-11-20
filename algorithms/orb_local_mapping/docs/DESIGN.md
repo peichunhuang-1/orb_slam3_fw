@@ -103,7 +103,7 @@
 
 ## 鎖外計算
 
-local BA 在 EuRoC 上一次約 20–60 ms（Pi 上更久），IMU 初始化的 full inertial BA（100 次迭代、整張地圖）可達數百 ms 到秒。behavior block 每個 tick 持有它用到的所有資源，若在 tick 內算，tracking 在這段時間拿不到 `atlas`，每個影格都要等。所以依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)拆成三段：
+local BA 在 EuRoC 上一次約 20–60 ms（Pi 上更久），IMU 初始化的 full inertial BA（100 次迭代、整張地圖）可達數百 ms 到秒。behavior block 每個 tick 持有它用到的所有資源。`atlas` 是 `versioned`，tracking 不會等；但若在 tick 內算，這段時間 local mapping 收不到 tracking 的 edit（tracking 新 keyframe 的 `ProcessNewKeyFrame` 也跟著延後），之後 loop closing 寫 `atlas` 時也要等。所以依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)拆成三段：
 
 ```
 local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)          local_mapping (tick N+k, 持有 atlas)
@@ -151,7 +151,8 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 **鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。
 
 - 只有接收資料的 tick（最佳化進行中到達的 `atlas_edits`、`mapper_cmd`）很短。
-- 處理一個 keyframe 的同步部分（`ProcessNewKeyFrame` 到 `SearchInNeighbors`、`KeyFrameCulling`）在一個 tick 內完成，期間 tracking 等待。原版這些步驟靠每個物件自己的 mutex 與 tracking 同時進行。先量時間：若 `CreateNewMapPoints` 與 `SearchInNeighbors` 在 Pi 上讓 tracking 等太久，再把它們也拆成鎖外計算，或在兩步之間讓出一個 tick。
+- 處理一個 keyframe 的同步部分（`ProcessNewKeyFrame` 到 `SearchInNeighbors`、`KeyFrameCulling`）在一個 tick 內完成。`atlas` 是 `versioned`，tracking 不等它，讀到的是最近發布的版本，與原版靠每個物件自己的 mutex 讓 tracking 同時進行相近（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md#第-3-步的驗證)）。
+- `ProcessNewKeyFrame` 要在 tracking 的下一幀之前完成，否則下一幀看到的新 keyframe 還沒有 BoW 與觀測（原版也是）。所以 `process_new_keyframe` 要保持短，耗時的步驟都放在它之後。
 
 ## 樹的邏輯
 

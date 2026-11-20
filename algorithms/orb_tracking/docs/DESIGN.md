@@ -91,7 +91,7 @@ ORB-SLAM3 在 tracking 的執行緒內做 `PreintegrateIMU`：從佇列取出上
 | **資源 `vocabulary`**（`map/Vocabulary`，read） | ORB 詞彙樹（與 DBoW2 的 ORBvoc 同一份資料） | 很大、唯讀、之後 loop closing 也要用。`store:` 在啟動時載入；`fw_save` 不做事，不會寫回 |
 | **鍵**（blackboard） | `state`（`tracking/State`）、`inertial`、`ok`（`bOK`，只在 `track` 子樹內） | 決定樹的分支，樹檔中看得到，執行時在樹分頁的 Keys 面板上可以觀察 |
 
-**鎖的範圍**：tracking 只在 `sync_atlas` 讀取 `atlas`（O(1) 複製 tile 共用的副本），其餘時間不持有它；`atlas` 改成 `versioned` 後連這一次也不必等寫入者。ORB-SLAM3 是在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
+**鎖的範圍**：tracking 只在 `sync_atlas` 讀取 `atlas`（O(1) 複製 tile 共用的副本），其餘時間不持有它；`atlas` 是 `policy: versioned`，所以這一次也不必等寫入者。ORB-SLAM3 是在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
 
 **以 id 引用，不用指標**：ORB-SLAM3 的物件以指標互相引用（`Frame::mvpMapPoints`、`KeyFrame` 的 covisibility、`MapPoint` 的觀測）。這裡一律改用 id：`tracker`、`Frame`、`KeyFrame`、`MapPoint` 之間只存 keyframe id 與 point id，使用時向 `atlas` 查。因此 `tracker` 不保留任何指向資源內部的指標，符合 fw 的一般規則；重設或刪除後查不到的 id 直接略過，與 ORB-SLAM3 的 `isBad()` 檢查同義。keyframe 與 map point 存放在以 id 為鍵的 `fw::TiledMap`（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md)），每次查詢約 50 ns（5 萬點時）。其他 block 對 keyframe 的引用同樣用 id（`map/KeyFrameRef`）。
 

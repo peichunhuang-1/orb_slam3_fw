@@ -9,7 +9,7 @@ boxes:
   main:
     resources:
       gpu:          { type: gpu/Device }
-      atlas:        { type: map/Atlas }                    # tracking and local mapping (loop closing later)
+      atlas:        { type: map/Atlas, policy: versioned }   # written by local mapping; tracking reads it without waiting
       tracker:      { type: tracking/Tracker }             # the tracking tree's own state
       local_mapper: { type: local_mapping/LocalMapper }    # the local mapping tree's own state
       vocabulary:   { type: map/Vocabulary, store: "data://orb_vocabulary/ORBvoc.bin" }   # loaded at start, never saved

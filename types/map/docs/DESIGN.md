@@ -125,7 +125,7 @@ tracking 的葉節點不再寫入 `atlas` 資源。做法（第 2 步，與原�
 
 ### 已知問題：job 模式不會結束
 
-fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者的 `trigger` 上游時，job 結束時收不到 EOS。tracking（讀 `atlas`）正是 local mapping（寫 `atlas`）的上游，所以 `slam_job` 跑完資料後不會自行結束，要手動停止。已回報 fw。繞過方式是把 `sync_atlas` 宣告為 `write`，但會失去第 3 步 `versioned` 的好處，所以沒有採用。
+fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者的 `trigger` 上游時，job 結束時收不到 EOS。tracking（讀 `atlas`）正是 local mapping（寫 `atlas`）的上游，所以 `slam_job` 跑完資料後不會自行結束，要手動停止。已回報 fw。繞過方式是把 `sync_atlas` 宣告為 `write`，但會失去 `versioned` 的好處（第 3 步），所以沒有採用。
 
 ## 步驟
 
@@ -134,7 +134,7 @@ fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者
 | 0 | TiledMap 與 vector 的效能比較 | **已完成**，見上面的表 |
 | 1 | 換掉底層資料結構（Atlas 改成 COW、KeyFrame 拆成 meta 與 data、容器改成 vector），資源仍用 `writer_pref` | tracking 的 fixture 和 V1_02 的軌跡與現在一致。**已完成**，見下 |
 | 2 | tracking 改成只讀：tracking 的副本、修改以 edit 送出、id 配置 | 同上，另外確認 tracking 的葉節點不再拿資源。**已完成**，見下 |
-| 3 | `atlas` 改成 `policy: versioned`，量 tracking 的延遲和留住的 tile 數 | tracking 每幀的時間分布不再受 local mapping 影響 |
+| 3 | `atlas` 改成 `policy: versioned`，量 tracking 的延遲和留住的 tile 數 | tracking 每幀的時間分布不再受 local mapping 影響。**已完成**，見下（留住的 tile 數沒有量） |
 | 4 | 填 local mapping 的 stub（照 orb_local_mapping 的設計，寫入改用 `edit`） | local mapping 自己的 fixture |
 
 ### 第 1 步的驗證
@@ -149,3 +149,19 @@ fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者
 - 14 個測試全部通過。
 - V1_02 的 slam job：與第 1 步的輸出逐行相同（1710 幀，324 個 keyframe、15669 個點）。跑完資料後不會自行結束（見上面的已知問題）；暫時把 `sync_atlas` 宣告為 `write` 時，約 93 秒自行結束。
 - tracking 的葉節點都不再宣告 `atlas` 資源，只有 `sync_atlas` 以 `read` 使用。
+
+### 第 3 步的驗證
+
+`slam_job` 的 `atlas` 改成 `policy: versioned`。量的是每幀的「等待」：`imu_preintegration` 送出 frame 到 tracking 的 `make_frame` 開始之間的時間（steady clock，暫時加的輸出，已移除）。
+
+- **`lossless: true`（評估用的設定）量不出差別**：driver 每送一筆都等整個框閒下來，local mapping 也包括在內，所以 tracking 和 local mapping 不會同時執行。兩種策略的等待都是 p99 1.4 ms，軌跡與第 2 步逐行相同（1710 幀，324 個 keyframe、15669 個點）。local mapping 變慢只會讓整段變長，不會讓 tracking 等。
+- **`lossless: false`（即時播放）、在 `map_point_culling` 暫時加 50 ms 的 sleep**（模擬之後的三角化、fuse，在 `ProcessNewKeyFrame` 之後、同一個 tick 內）：
+
+| | 等待 mean | p90 | p99 | 結束時 |
+|---|---|---|---|---|
+| `writer_pref` | 3.9 ms | 18.3 ms | 28.2 ms | 324 個 keyframe、15669 個點 |
+| `versioned` | 0.4 ms | 0.8 ms | 1.5 ms | 同上 |
+
+  tracking 本身每幀約 14 ms，兩者相同。max 約 170–180 ms 的是開頭的幾幀，兩者都有。
+
+- **`ProcessNewKeyFrame` 要在下一幀之前完成**：同樣的 50 ms sleep 改放在 `process_new_keyframe` 之前時，`versioned` 下 tracking 在初始化後的下一幀就 LOST，之後不斷重設。新的 keyframe 在 `ProcessNewKeyFrame` 之前沒有 BoW、觀測與 covisibility，`TrackReferenceKeyFrame` 找不到配對。`writer_pref` 下 tracking 會等它做完，所以看不出來。原版也是這樣（tracking 不等 local mapping，只是 `ProcessNewKeyFrame` 很快），所以行為與原版一致。第 4 步要讓 `process_new_keyframe` 保持短，耗時的步驟放在它之後。
