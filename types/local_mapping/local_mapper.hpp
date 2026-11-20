@@ -21,19 +21,19 @@ namespace local_mapping {
 
 enum class PendingReset { none, active_map, all };  // mbResetRequestedActiveMap / mbResetRequested
 
-// A keyframe's scratch (KeyFrame::mnBALocalForKF, mnBAFixedForKF, mnFuseTargetForKF, mnBAGlobalForKF and the
+// A keyframe's scratch (KeyFrame::mnBALocalForKF, mnBAFixedForKF, mnBAGlobalForKF and the
 // GBA results)
 struct KeyFrameScratch {
-    map::KeyFrameId ba_local_for = map::kNone, ba_fixed_for = map::kNone, fuse_target_for = map::kNone;
+    map::KeyFrameId ba_local_for = map::kNone, ba_fixed_for = map::kNone;
     map::KeyFrameId ba_global_for = map::kNone;
     geometry::SE3f Tcw_gba, Tcw_before_gba;
     Eigen::Vector3f velocity_gba = Eigen::Vector3f::Zero(), velocity_before_gba = Eigen::Vector3f::Zero();
     imu::Bias bias_gba;
 };
 
-// A map point's scratch (MapPoint::mnBALocalForKF, mnFuseCandidateForKF, mnBAGlobalForKF, mPosGBA)
+// A map point's scratch (MapPoint::mnBALocalForKF, mnBAGlobalForKF, mPosGBA)
 struct PointScratch {
-    map::KeyFrameId ba_local_for = map::kNone, fuse_candidate_for = map::kNone, ba_global_for = map::kNone;
+    map::KeyFrameId ba_local_for = map::kNone, ba_global_for = map::kNone;
     Eigen::Vector3f pos_gba = Eigen::Vector3f::Zero();
 };
 

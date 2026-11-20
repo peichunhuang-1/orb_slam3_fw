@@ -144,11 +144,13 @@ endforeach()
 # orb_local_mapping tests (not installed): build/orb_slam3_fw/orb_local_mapping_<name>_test
 #   map_point_culling  map_point_culling/culling on synthetic points (bookkeeping)
 #   new_map_points     create_new_map_points/triangulation vs tests/fixtures/orb_slam3/new_map_points
+#   fuse               search_in_neighbors/fuse vs tests/fixtures/orb_slam3/fuse
 set(ORB_LOCAL_MAPPING_TEST_TYPES types/map/atlas_ops.cpp types/map/bow_index.cpp types/map/vocabulary.cpp
     types/imu/preintegrated.cpp types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
 set(orb_local_mapping_map_point_culling_test_SOURCES algorithms/orb_local_mapping/map_point_culling/culling.cpp)
 set(orb_local_mapping_new_map_points_test_SOURCES algorithms/orb_local_mapping/create_new_map_points/triangulation.cpp)
-foreach(t map_point_culling new_map_points)
+set(orb_local_mapping_fuse_test_SOURCES algorithms/orb_local_mapping/search_in_neighbors/fuse.cpp)
+foreach(t map_point_culling new_map_points fuse)
   add_executable(orb_local_mapping_${t}_test tests/orb_local_mapping/${t}_test.cpp
                  ${orb_local_mapping_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
   target_include_directories(orb_local_mapping_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

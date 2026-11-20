@@ -267,6 +267,50 @@ one is current, and each keyframe's previous one (`mPrevKF`) is the one before i
 - `inertial_coarse` (RECENTLY_LOST with BA2 done, so bCoarse: no epipolar check);
 - `far_points` (`mThFarPoints` = 4 m).
 
+## fuse/
+
+`LocalMapping::SearchInNeighbors` (`ORBmatcher::Fuse` both ways) on a small atlas with duplicated points. Made
+on 2026-11-20 by calling the original's own `SearchInNeighbors` (from a `LocalMapping` subclass) after building
+the atlas from its own `KeyFrame` and `MapPoint` objects.
+
+**Scene:** fourteen keyframes along the analytic trajectory, 0.1 s apart from t = 30 s. The last one is
+current, and each keyframe's previous one (`mPrevKF`) is the one before it.
+- **Scene points** (450) are in front of the current keyframe and seen by every keyframe that sees them, in
+  the left view, the right view or both, at an octave that fits the distance. Their descriptors are one
+  vocabulary word per point with 0–8 bits flipped per view.
+- **Map points:** 15 % of the scene points have none. For the others, each keyframe 1–13 that sees the point
+  is left out (15 %) or put in one of up to three groups at random. Each group becomes its own map point, so
+  one scene point is often two or three map points: these duplicates are what `Fuse` merges. Each map point
+  is 1 cm (σ) off its scene point, and 5 % are 0.3 m off. Each has a random reference keyframe among its
+  observers and random `mnVisible` / `mnFound`. Its descriptor, normal and scale range come from the
+  original's `ComputeDistinctiveDescriptors` and `UpdateNormalAndDepth`.
+- **Keyframe 0** has features but no map point, so it has no covisibility. Only the inertial prev chain
+  reaches it.
+- **Distractors:** each keyframe has 30 more features with random words.
+
+**Inputs**
+- `inertial` and `n_keyframes`.
+- Per keyframe k, under `kfk_`: `Tcw`, `timestamp`, `kp_left` and `kp_right` (x y octave), and `desc`
+  (N x 32, left then right, in frame index order).
+- `point_ref`: each map point's reference keyframe.
+- `before_kfk_points`: per frame index, the map point (a row of `before_points`) or -1.
+- `before_points`: per map point: bad, replaced by (-1), `nObs`, visible, found, x y z, normal x y z, then
+  `mfMinDistance` and `mfMaxDistance`. `before_point_desc`: the descriptors (32 bytes).
+- `before_covisibles`: the current keyframe's covisibles by weight. Each row is a keyframe and its weight.
+
+**Outputs**
+- `targets`: the keyframes marked as fuse targets (`mnFuseTargetForKF`), ascending. The order is not
+  observable from outside.
+- `after_kfk_points`, `after_points`, `after_point_desc` and `after_covisibles`: the same as the inputs, after
+  `SearchInNeighbors`. A bad point's normal and descriptor are as `Replace` left them.
+
+**Cases:**
+- `stereo`: ten best covisibles plus two second neighbours;
+- `inertial`: the prev chain also adds keyframe 0.
+
+**Note:** the original calls `Fuse(pKF, points, true)` for the right camera. That binds `true` to `th`, not to
+`bRight`, so the second call is a left-camera fuse with th = 1. These outputs include that.
+
 ## Not here
 
 No full-sequence trajectory from the original: the port's trajectory is checked against the recordings' ground

@@ -13,12 +13,17 @@
 | `ba_solver` | 只有流程：把問題原樣送回 |
 | `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
 | `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
-| `search_in_neighbors`、`keyframe_culling`、`initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
+| `search_in_neighbors`（`SearchInNeighbors`、`ORBmatcher::Fuse`） | 已實作（`search_in_neighbors/fuse`），與原版的 fixture 一致：`orb_local_mapping_fuse_test`（`tests/fixtures/orb_slam3/fuse`） |
+| `keyframe_culling`、`initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
 | tracking 端的 `tracking_ok_seq` | 型別已加，`apply_mapper_update` 尚未改 |
 
 **骨架的實跑**（`fw launch graphs/slam_job.graph.yaml`，V1_02_medium，stereo-inertial）：tracking 從頭到尾都是 OK，處理了 300 多個 keyframe（以前臨時加入 `ProcessNewKeyFrame` 時是 324 個），每影格 240–500 個 inlier。從第 3 個 keyframe 起，每個 keyframe 都完成一次 `ba_problem → ba_solver → ba_result` 的 wake 來回。tracking 在 local mapping 忙時不送 keyframe，所以佇列自然不會超過 1 個。另外以暫時的追蹤輸出測過佇列有 3 個的情形（每 10 個 keyframe 重複放入 3 次，`ba_solver` 多睡 300 ms）：每個 keyframe 各用一個 tick，tick 之間沒有新資料時由 fw 自己補上，三個都處理完才進 `mapper_idle`（見「樹的邏輯」）。
 
 **加入 `map_point_culling`、`create_new_map_points` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：tracking 仍然從頭到尾都是 OK，300 個 keyframe 時每影格 280–550 個 inlier。每個 keyframe 三角化出 40–110 個新點，`MapPointCulling` 之後地圖的點數穩定增加（keyframe 100 時約 2,900 個、300 時約 8,000 個），`recent_points` 保持在 300–700 個。local BA 仍是空殼，所以新點的位置沒有經過最佳化。
+
+**加入 `search_in_neighbors` 之後的實跑**（同上）：每個 keyframe 的 Fuse 合併掉地圖上 1–5% 的點（例如 keyframe 220 時 4,877 → 4,726），地圖在 keyframe 300 時約 5,200 個點（之前約 8,000 個，差的大多是重複的點）。整段沒有 reset 或新地圖的訊息。
+
+原版 `SearchInNeighbors` 要「融合到右相機」的兩次呼叫寫成 `Fuse(pKF, points, true)`，但簽名是 `Fuse(pKF, points, th = 3.0, bRight = false)`：`true` 變成 `th = 1`，實際上是再做一次左相機、半徑 1 的 Fuse，右相機從來沒有被融合。這是由 fixture 找到的（加上右相機的版本時，多替換約 10% 的點），port 照原樣重現，寫在 `fuse.hpp` 開頭。
 
 `SearchForTriangulation` 的 matcher 是 `ORBmatcher(0.6, false)`，不做方向檢查，所以原本計畫的 `rotation_histogram.hpp` 搬到 `types/orb/` 不需要做。
 
@@ -152,7 +157,7 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 | **資源 `vocabulary`**（read） | ORB 詞彙樹 | `ProcessNewKeyFrame` 的 `ComputeBoW` |
 | **鍵** | `inertial`（樹的分支用，由 `receive_inputs` 依 `params.sensor` 寫入） | |
 
-**查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBALocalForKF`、`mnBAFixedForKF`、`mnFuseTargetForKF`、`mnFuseCandidateForKF`、`mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
+**查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBALocalForKF`、`mnBAFixedForKF`、`mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。`mnFuseTargetForKF`、`mnFuseCandidateForKF` 只在一次 SearchInNeighbors 裡有意義（每個 keyframe 只當一次 current），所以改成該次呼叫裡的 set，不保存。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
 
 **鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。`atlas` 是 `versioned`，鎖與發布是分開的：寫入鎖持有到 tick 結束，但每個寫入 `atlas` 的葉節點回傳時就發布一個新版本（同一個 tick 裡後面的葉節點接著在它上面寫）。所以只讀 `atlas` 的葉節點要宣告成 `read`，否則每次都多一個空的版本。
 
@@ -231,7 +236,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `map_point_culling` | action | | atlas w、local_mapper w | `MapPointCulling` |
 | `create_new_map_points` | action | `tracking` Optional | atlas w、local_mapper w | `CreateNewMapPoints`（`SearchForTriangulation`、三角化）；結束時 `mbAbortBA = false` |
 | `queue_empty` | condition | | local_mapper r | `!CheckNewKeyFrames()` |
-| `search_in_neighbors` | action | | atlas w、local_mapper w | `SearchInNeighbors`（`Fuse` 兩個方向） |
+| `search_in_neighbors` | action | | atlas w、local_mapper r | `SearchInNeighbors`（`Fuse` 兩個方向） |
 | `ready_for_local_ba` | condition | | local_mapper r | `!CheckNewKeyFrames() && !stopRequested()` |
 | `enough_keyframes_for_ba` | condition | | atlas r | `mpAtlas->KeyFramesInMap() > 2` |
 | `local_bundle_adjustment` | stateful action | `inertial`、`tracking` Optional、`ba_result` Optional、`ba_problem` out、`mapper` out | atlas w、local_mapper w | inertial 且 IMU 已初始化：`mTinit` 的累加、移動不足的重設、`LocalInertialBA`；否則 `LocalBundleAdjustment` |
@@ -326,7 +331,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | `InertialOptimization` | keyframe 的位姿與預積分、`Rwg`、scale、bias 的初值、priorG、priorA → `Rwg`、scale、bias、速度 |
 | `FullInertialBA` | 整張小地圖 → 狀態、點 |
 | `CreateNewMapPoints` 的三角化 | **已產生**（`new_map_points/`）：六個 keyframe 的小地圖 → covisibility 的順序、每個鄰居的 `SearchForTriangulation`、新點（keyframe、索引、位置） |
-| `Fuse` | keyframe、投影的點 → 加入或替換的結果 |
+| `Fuse` | **已產生**（`fuse/`）：十四個 keyframe、含重複點的小地圖 → 融合的目標、每個 keyframe 的點、每個點的 bad／replaced／計數／描述子、covisibility |
 
 `MapPointCulling`、`KeyFrameCulling`、`ProcessNewKeyFrame` 是簿記，以 `types_atlas_test` 那種合成 keyframe 做單元測試，不需要原版的答案。整條軌跡直接以 bag 的 ground truth 算 ATE。
 
