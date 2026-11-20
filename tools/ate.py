@@ -75,14 +75,16 @@ def _records(b):
 
 
 def _messages(b, channels):
-    """(topic, log time in s, data) of every message in the records b; channels (id -> topic) filled on the way."""
+    """(topic, publish time, log time (s), data) of every message in the records b; channels (id -> topic) filled
+    on the way. fw leaves the header's stamp 0: the publish time is the data's stamp (the sensor's), the log time
+    when the tap recorded it (later by the processing when the playback is not lossless)."""
     for op, body in _records(b):
         if op == 0x04:  # Channel: id u16, schema id u16, topic, encoding, metadata
             (cid,) = struct.unpack_from("<H", body, 0)
             channels[cid], _ = _string(body, 4)
         elif op == 0x05:  # Message: channel u16, sequence u32, log time u64, publish time u64, data
-            cid, _, log_time = struct.unpack_from("<HIQ", body, 0)
-            yield channels.get(cid), 1e-9 * log_time, body[22:]
+            cid, _, log_time, publish_time = struct.unpack_from("<HIQQ", body, 0)
+            yield channels.get(cid), 1e-9 * publish_time, 1e-9 * log_time, body[22:]
         elif op == 0x06:  # Chunk: start, end, uncompressed size u64, crc u32, compression, records
             (size,) = struct.unpack_from("<Q", body, 16)
             comp, o = _string(body, 28)
@@ -96,7 +98,7 @@ def _messages(b, channels):
 
 
 def _position(d):
-    """geometry_msgs/PoseStamped in CDR: the position (fw leaves the header's stamp 0; the time is the log time)."""
+    """geometry_msgs/PoseStamped in CDR: the position."""
     (n,) = struct.unpack_from("<I", d, 12)
     o = 16 + n
     o = 4 + ((o - 4 + 7) & ~7)  # doubles aligned to 8 from the start of the payload
@@ -122,15 +124,18 @@ def _rotate(q, v):
     return r @ np.asarray(v)
 
 
-def read_positions(mcap, frame="odom"):
+def read_positions(mcap, frame="odom", latency=None):
+    """est (t, x, y, z), gt (t, x, y, z) by the data's stamp; latency (a list): the pose's log − publish times."""
     b = open(mcap, "rb").read()
     if b[:8] != b"\x89MCAP0\r\n":
         sys.exit(f"{mcap}: not an mcap file")
     out = {POSE_TOPIC: [], GT_TOPIC: []}
     map_odom = {}
-    for topic, t, data in _messages(b[8:], {}):
+    for topic, t, logged, data in _messages(b[8:], {}):
         if topic in out:
             out[topic].append((t, *_position(data)))
+            if topic == POSE_TOPIC and latency is not None:
+                latency.append(logged - t)
         elif topic == MAP_ODOM_TOPIC:
             map_odom[t] = _transform(data)
     for topic, v in out.items():
@@ -176,7 +181,8 @@ def main():
     args = ap.parse_args()
 
     mcap = find_mcap(args.path)
-    est, gt = read_positions(mcap, args.frame)
+    latency = []
+    est, gt = read_positions(mcap, args.frame, latency)
     if len(est) < 3 or len(gt) < 3:
         sys.exit(f"{mcap}: {len(est)} poses, {len(gt)} ground truth samples: too few")
     est = est[est[:, 0] >= gt[0, 0] + args.start]
@@ -187,6 +193,9 @@ def main():
     print(f"{mcap} ({args.frame})")
     print(f"poses {len(est)}, ground truth {len(gt)} ({gt[0, 0]:.2f}–{gt[-1, 0]:.2f} s), paired {len(x)}, "
           f"span {t[0] - gt[0, 0]:.1f}–{t[-1] - gt[0, 0]:.1f} s")
+    lat = 1e3 * np.array(latency)
+    print(f"latency sensor stamp -> pose recorded: median {np.median(lat):.1f} ms, p95 {np.percentile(lat, 95):.1f}, "
+          f"max {lat.max():.1f} (0 in lossless playback, which runs in lockstep)")
     for name, with_scale in (("SE3", False), ("Sim3", True)):
         s, r, tr = umeyama(x, y, with_scale)
         err = np.linalg.norm(y - (s * (r @ x.T).T + tr), axis=1)

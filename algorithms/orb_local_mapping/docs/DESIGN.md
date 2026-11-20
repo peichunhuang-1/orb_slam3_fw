@@ -48,6 +48,21 @@
 
 Sim3 對齊的尺度是 1.003–1.005。這裡算的是每個影格當下的位姿，不是原版存檔時透過最佳化後的 keyframe 重新換算的軌跡。IMU 初始化與 VIBA 1、2 會以 `applyScaledRotation` 移動整張地圖，所以在那之前送出的位姿位在舊的世界座標系，一次對齊對不齊（5.85 s 時位姿跳了 1.26 m）。前 10 秒的大誤差就是這個原因，不是追蹤的誤差。
 
+**即時播放**（`euroc_mcap_driver.yaml` 暫時改成 `lossless: false`，以真實速率播放；Pi 5，`tools/fw_stats.py` 同時收集統計）：
+
+| | lockstep（`lossless: true`） | 即時 |
+|---|---|---|
+| 掉的影格 | 0 | 6 / 1,710，全在第一秒（GPU 與初始化暖機：matcher 最長 221 ms、tracking 212 ms），之後 0 |
+| 送出的位姿 | 1,620 | 1,619 |
+| keyframe（`atlas_edits`）／local BA | — ／ 351 | 347 ／ 349 |
+| 延遲（感測器時間戳 → 位姿） | — | 中位數 40 ms、p95 55、最大 100（模擬時鐘以 5 ms 為單位） |
+| ATE（odom，SE3）整段／10 s 起 | 0.092 ／ 0.051 m | 0.107 ／ 0.051 m |
+| odom 步長誤差 10 s 起：p99、> 20 mm | 7.4 mm、0 | 8.0 mm、0 |
+
+- 每個影格：兩個 extractor 各約 14 ms、matcher 1.9 ms、tracking 12 ms（平均）。
+- 每個 keyframe：local mapping 的 tick 20–26 ms（`process_new_keyframe` 到 `keyframe_culling`）、`ba_solver` 47–54 ms（鎖外）、寫回 5–9 ms。keyframe 最密時每秒 6 個，local mapping 與 `ba_solver` 合計每秒約 0.45 s 的計算，跟得上，佇列沒有堆積，`atlas_edits` 沒有被丟。
+- 量 ATE 要用資料的時間戳：tap 的 mcap 記錄裡 publish time 是資料的時間戳，log time 是錄下的時間，即時播放時晚了處理的延遲（lockstep 時兩者相同）。`tools/ate.py` 用前者配對，兩者的差就是上表的延遲。
+
 `LocalInertialBA` 與原版的差異（都寫在 `local_ba.hpp` 開頭）：
 - 原版用 `MapPoint::mTrackDepth`（tracking 上次投影該點時的距離）決定 outlier 門檻要不要放寬（< 10 m 時 chi2 門檻乘 1.5）。這是 tracking 的暫存，local mapping 看不到；port 改用該點到目前 keyframe 相機中心的距離。fixture 也照這個規則設定 `mTrackDepth`，所以比對時兩邊相同。
 - 一個點的觀測，原版依 `KeyFrame*` 位址排序，port 依 id。從點的觀測挑出額外的固定 keyframe 時，每個點只取第一個，所以順序會影響結果。fixture 生成器把 keyframe 放在同一塊連續記憶體裡，讓位址順序與 id 順序相同。
