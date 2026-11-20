@@ -164,4 +164,4 @@ fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者
 
   tracking 本身每幀約 14 ms，兩者相同。max 約 170–180 ms 的是開頭的幾幀，兩者都有。
 
-- **`ProcessNewKeyFrame` 要在下一幀之前完成**：同樣的 50 ms sleep 改放在 `process_new_keyframe` 之前時，`versioned` 下 tracking 在初始化後的下一幀就 LOST，之後不斷重設。新的 keyframe 在 `ProcessNewKeyFrame` 之前沒有 BoW、觀測與 covisibility，`TrackReferenceKeyFrame` 找不到配對。`writer_pref` 下 tracking 會等它做完，所以看不出來。原版也是這樣（tracking 不等 local mapping，只是 `ProcessNewKeyFrame` 很快），所以行為與原版一致。第 4 步要讓 `process_new_keyframe` 保持短，耗時的步驟放在它之後。
+- **`ProcessNewKeyFrame` 要在下一幀之前完成**：同樣的 50 ms sleep 改放在 `process_new_keyframe` 之前時，`versioned` 下 tracking 在初始化後的下一幀就 LOST，之後不斷重設。新的 keyframe 在 `ProcessNewKeyFrame` 之前沒有 BoW、觀測與 covisibility，`TrackReferenceKeyFrame` 找不到配對。`writer_pref` 下 tracking 會等它做完，所以看不出來。原版也是這樣（tracking 不等 local mapping，只是 `ProcessNewKeyFrame` 很快），所以行為與原版一致。`map_point_culling` 那次不受影響，是因為行為樹 block 寫入 `versioned` 資源時，**每個葉節點回傳就發布一個新版本**（寫入鎖則持有整個 tick）；`process_new_keyframe` 一回傳，新 keyframe 的 BoW 與觀測就看得到了，後面的 sleep 只延後之後的版本。所以第 4 步不必把同一個 tick 裡較慢的步驟拆出去；只要別把耗時的工作放進 `process_new_keyframe` 或它之前。

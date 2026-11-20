@@ -148,11 +148,11 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 
 **查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBALocalForKF`、`mnBAFixedForKF`、`mnFuseTargetForKF`、`mnFuseCandidateForKF`、`mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
 
-**鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。
+**鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。`atlas` 是 `versioned`，鎖與發布是分開的：寫入鎖持有到 tick 結束，但每個寫入 `atlas` 的葉節點回傳時就發布一個新版本（同一個 tick 裡後面的葉節點接著在它上面寫）。所以只讀 `atlas` 的葉節點要宣告成 `read`，否則每次都多一個空的版本。
 
 - 只有接收資料的 tick（最佳化進行中到達的 `atlas_edits`、`mapper_cmd`）很短。
 - 處理一個 keyframe 的同步部分（`ProcessNewKeyFrame` 到 `SearchInNeighbors`、`KeyFrameCulling`）在一個 tick 內完成。`atlas` 是 `versioned`，tracking 不等它，讀到的是最近發布的版本，與原版靠每個物件自己的 mutex 讓 tracking 同時進行相近（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md#第-3-步的驗證)）。
-- `ProcessNewKeyFrame` 要在 tracking 的下一幀之前完成，否則下一幀看到的新 keyframe 還沒有 BoW 與觀測（原版也是）。所以 `process_new_keyframe` 要保持短，耗時的步驟都放在它之後。
+- 新 keyframe 的 BoW 與觀測在 `process_new_keyframe` 回傳時就發布，tracking 的下一幀讀得到（原版的 `ProcessNewKeyFrame` 也很快）。它之後同一個 tick 的三角化、fuse 不會延後這件事，所以不必拆出去；耗時的工作只要別放進 `process_new_keyframe` 或它之前。
 
 ## 樹的邏輯
 
@@ -333,7 +333,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | ~~BoW 索引（KeyFrameDatabase）由誰加入~~ | **已定 (a)**：照原版，由 loop closing 加入；local mapping 不加 | loop closing 做好之前 relocalization 沒有候選 |
 | ~~`ba_solver` 的解法器~~ | **已定 (a)**：自己寫 LM + Schur，做成通用的 static 函式庫（只依賴 Eigen，不依賴 fw），之後光達 BA 共用 | 函式庫的位置與介面見下 |
 | ~~`Repeat(-1)` 是否在同一個 tick 內迴圈~~ | 已實測：每輪讓出 tick，fw 自行補 tick，佇列照樣處理完 | 不需改設計 |
-| 同步部分讓 tracking 等多久 | 量過再決定是否把 `CreateNewMapPoints`、`SearchInNeighbors` 拆出去 | 先不拆 |
+| ~~同步部分讓 tracking 等多久~~ | **已定：不拆**。tracking 是 `versioned` 的讀取者，不等寫入鎖；`process_new_keyframe` 的結果在它回傳時就發布 | 只有之後 loop closing 也寫 `atlas` 時，它要等整個 tick；到時再量 |
 
 **非線性最小平方的函式庫（待定位置，建議 `libs/nls/`）**：純數學，只依賴 Eigen，不依賴 fw，建成 STATIC 函式庫連進 blocks 並有自己的單元測試。視覺與光達的 BA 共用，所以不照「最小的資料夾」放在 `ba_solver/` 下。
 
