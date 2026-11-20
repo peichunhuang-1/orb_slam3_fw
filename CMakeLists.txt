@@ -141,6 +141,25 @@ foreach(t pose_optimizer search_by_bow pose_inertial mlpnp)
   endif()
 endforeach()
 
+# orb_local_mapping tests (not installed): build/orb_slam3_fw/orb_local_mapping_<name>_test
+#   map_point_culling  map_point_culling/culling on synthetic points (bookkeeping)
+#   new_map_points     create_new_map_points/triangulation vs tests/fixtures/orb_slam3/new_map_points
+set(ORB_LOCAL_MAPPING_TEST_TYPES types/map/atlas_ops.cpp types/map/bow_index.cpp types/map/vocabulary.cpp
+    types/imu/preintegrated.cpp types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
+set(orb_local_mapping_map_point_culling_test_SOURCES algorithms/orb_local_mapping/map_point_culling/culling.cpp)
+set(orb_local_mapping_new_map_points_test_SOURCES algorithms/orb_local_mapping/create_new_map_points/triangulation.cpp)
+foreach(t map_point_culling new_map_points)
+  add_executable(orb_local_mapping_${t}_test tests/orb_local_mapping/${t}_test.cpp
+                 ${orb_local_mapping_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
+  target_include_directories(orb_local_mapping_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(orb_local_mapping_${t}_test PRIVATE
+                             ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3")
+  target_link_libraries(orb_local_mapping_${t}_test Eigen3::Eigen opencv_core fw::core)
+  if(BUILD_TESTING)
+    add_test(NAME orb_local_mapping_${t}_test COMMAND orb_local_mapping_${t}_test)
+  endif()
+endforeach()
+
 # orb_extractor: no fused multiply-add, so the Harris responses and BRIEF rotations round exactly as
 # the GPU version's `precise` arithmetic (same keypoints and descriptors).
 set_source_files_properties(algorithms/orb_extractor/orb_cpu.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")

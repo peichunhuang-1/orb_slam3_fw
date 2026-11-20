@@ -11,10 +11,16 @@
 | `process_new_keyframe`（`ProcessNewKeyFrame`） | 已實作（`shared/process_keyframe`） |
 | `local_bundle_adjustment` | 只有流程：送出空的問題、等 `ba_result` 的序號、回傳 SUCCESS；動作窗、問題的內容與寫回是 TODO |
 | `ba_solver` | 只有流程：把問題原樣送回 |
-| `map_point_culling`、`create_new_map_points`、`search_in_neighbors`、`keyframe_culling`、`initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
+| `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
+| `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
+| `search_in_neighbors`、`keyframe_culling`、`initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
 | tracking 端的 `tracking_ok_seq` | 型別已加，`apply_mapper_update` 尚未改 |
 
 **骨架的實跑**（`fw launch graphs/slam_job.graph.yaml`，V1_02_medium，stereo-inertial）：tracking 從頭到尾都是 OK，處理了 300 多個 keyframe（以前臨時加入 `ProcessNewKeyFrame` 時是 324 個），每影格 240–500 個 inlier。從第 3 個 keyframe 起，每個 keyframe 都完成一次 `ba_problem → ba_solver → ba_result` 的 wake 來回。tracking 在 local mapping 忙時不送 keyframe，所以佇列自然不會超過 1 個。另外以暫時的追蹤輸出測過佇列有 3 個的情形（每 10 個 keyframe 重複放入 3 次，`ba_solver` 多睡 300 ms）：每個 keyframe 各用一個 tick，tick 之間沒有新資料時由 fw 自己補上，三個都處理完才進 `mapper_idle`（見「樹的邏輯」）。
+
+**加入 `map_point_culling`、`create_new_map_points` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：tracking 仍然從頭到尾都是 OK，300 個 keyframe 時每影格 280–550 個 inlier。每個 keyframe 三角化出 40–110 個新點，`MapPointCulling` 之後地圖的點數穩定增加（keyframe 100 時約 2,900 個、300 時約 8,000 個），`recent_points` 保持在 300–700 個。local BA 仍是空殼，所以新點的位置沒有經過最佳化。
+
+`SearchForTriangulation` 的 matcher 是 `ORBmatcher(0.6, false)`，不做方向檢查，所以原本計畫的 `rotation_histogram.hpp` 搬到 `types/orb/` 不需要做。
 
 - 樹檔：[`graphs/trees/local_mapping/`](../../../graphs/trees/local_mapping/)
 - 圖檔：[`graphs/slam_job.graph.yaml`](../../../graphs/slam_job.graph.yaml)（tracking + local mapping；[`tracking_job.graph.yaml`](../../../graphs/tracking_job.graph.yaml) 保持不變）
@@ -275,7 +281,6 @@ ba_solver (algorithm class)
 
 | 程式 | 從 | 到 | 新的使用者 |
 |---|---|---|---|
-| `rotation_histogram.hpp` | `orb_tracking/shared/` | `types/orb/` | `create_new_map_points`（`SearchForTriangulation`） |
 | `imuInitialized`、`inertialBA2`（`tracking_ops`） | `orb_tracking/shared/` | `types/map/atlas_ops` | 好幾個 LM 葉節點 |
 | inertial 的邊（預積分殘差與 Jacobian） | `orb_tracking/track_local_map/pose_inertial_optimizer` | `types/imu/` | `ba_solver` |
 
@@ -288,7 +293,6 @@ types/
   tracking/mapper_status.hpp     + tracking_ok_seq                                     +2     （已加）
   map/atlas_ops                  + ApplyScaledRotation、KeyFramesInMap、imuInitialized 等  ~80
   imu/inertial_residual.hpp      預積分殘差與 Jacobian（從 pose_inertial_optimizer 搬來）  ~250
-  orb/rotation_histogram.hpp     搬來                                                  既有
 algorithms/
   orb_local_mapping/shared/
     process_keyframe.hpp/.cpp    ProcessNewKeyFrame：process_new_keyframe、initialize_imu  ~80
@@ -321,7 +325,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | `LocalInertialBA` | 上述加速度、bias、預積分；`bLarge`、`bRecInit` 兩種 → 狀態、刪除的觀測 |
 | `InertialOptimization` | keyframe 的位姿與預積分、`Rwg`、scale、bias 的初值、priorG、priorA → `Rwg`、scale、bias、速度 |
 | `FullInertialBA` | 整張小地圖 → 狀態、點 |
-| `CreateNewMapPoints` 的三角化 | 兩個 keyframe 的配對 → 接受與否、3D 點（包含視差、深度、重投影誤差的檢查） |
+| `CreateNewMapPoints` 的三角化 | **已產生**（`new_map_points/`）：六個 keyframe 的小地圖 → covisibility 的順序、每個鄰居的 `SearchForTriangulation`、新點（keyframe、索引、位置） |
 | `Fuse` | keyframe、投影的點 → 加入或替換的結果 |
 
 `MapPointCulling`、`KeyFrameCulling`、`ProcessNewKeyFrame` 是簿記，以 `types_atlas_test` 那種合成 keyframe 做單元測試，不需要原版的答案。整條軌跡直接以 bag 的 ground truth 算 ATE。

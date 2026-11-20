@@ -1,7 +1,8 @@
 # ORB-SLAM3 golden fixtures
 
 Inputs and outputs of the original ORB-SLAM3 code (the KB8 stereo / stereo-inertial "vslam" refactor), for
-checking the fw tracking port (`algorithms/orb_tracking/docs/DESIGN.md`) against it. The port is a rewrite;
+checking the fw tracking and local mapping ports (`algorithms/orb_tracking/docs/DESIGN.md`,
+`algorithms/orb_local_mapping/docs/DESIGN.md`) against it. The port is a rewrite;
 these files are the only link to the original, which is no longer in the repository.
 
 They were made by a one-off generator linked against the original. It built synthetic scenes and called the
@@ -221,6 +222,50 @@ k, L, word count, weighting (0 = TF-IDF) and scoring (0 = L1).
 - `noisy` (up to 40 flipped bits);
 - `exact_words`;
 - `duplicate_words` (pairs of features on one word).
+
+## new_map_points/
+
+`LocalMapping::CreateNewMapPoints` on a small atlas, and `ORBmatcher::SearchForTriangulation` between the
+current keyframe and each other keyframe before it. Made on 2026-11-20 by calling the original's own
+`CreateNewMapPoints` (from a `LocalMapping` subclass) after building the atlas from its own `KeyFrame` and
+`MapPoint` objects.
+
+**Scene:** six keyframes along the analytic trajectory at t = 30, 30.25, 30.5, 30.75, 30.98 and 31 s. The last
+one is current, and each keyframe's previous one (`mPrevKF`) is the one before it.
+- **Tracked points** already have a map point. Each is seen by the current keyframe and one other: 6 by
+  keyframe 0, then 18, 26, 34 and 42 by keyframes 1 to 4. So the covisibility order is fixed (4, 3, 2, 1).
+  Keyframe 0 is below the 15 of `UpdateConnections`, so only the inertial prev chain reaches it. Keyframe 4 is
+  20 ms before the current one, so its baseline is below `mb` and it is skipped.
+- **Untracked points** are seen by every keyframe that sees them, in the left view, the right view or both,
+  at an octave that fits the distance. Their descriptors are one vocabulary word per point with 0–8 bits
+  flipped per view.
+- **Distractors:** each keyframe has 40 more untracked features with random words.
+- Keypoint angles are -1. The matcher is made with `checkOri = false`, so they are not used.
+
+**Inputs**
+- Flags: `inertial`, `recently_lost` (tracking's `mState`), `imu_ba2` (the map's), `far_points` and
+  `th_far_points` (`mbFarPoints`, `mThFarPoints`).
+- `n_keyframes`.
+- `tracked_world`: the existing map points.
+- Per keyframe k, under `kfk_`:
+  - `Tcw` and `timestamp`;
+  - `kp_left` and `kp_right` (x y octave);
+  - `desc` (N x 32, left then right, in frame index order);
+  - `feat` (node and frame index, `mFeatVec` at 4 levels up, from ORBvoc);
+  - `points` (per frame index: the row of `tracked_world`, or -1).
+
+**Outputs**
+- `covisibles`: `GetBestCovisibilityKeyFrames(10)` of the current keyframe, as keyframe indices.
+- `search_kfk` and `search_kfk_coarse`: the pairs from `SearchForTriangulation(current, kf k, pairs, bCoarse)`
+  with bCoarse false and true. Each row is a current index and an other index, in current-index order.
+- `created`: the new points in the order of `mlpRecentAddedMapPoints`. Each row is the other keyframe, the
+  current index, the other index, then x y z in the world frame.
+
+**Cases:**
+- `stereo`;
+- `inertial` (the 0.9996 parallax threshold, and the prev chain adds keyframe 0);
+- `inertial_coarse` (RECENTLY_LOST with BA2 done, so bCoarse: no epipolar check);
+- `far_points` (`mThFarPoints` = 4 m).
 
 ## Not here
 
