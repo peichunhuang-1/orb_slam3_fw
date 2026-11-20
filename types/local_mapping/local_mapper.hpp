@@ -3,7 +3,7 @@
 // members, by id (algorithms/orb_local_mapping/docs/DESIGN.md, "資料放在哪裡"). Only the local_mapping tree uses
 // it. No mutex: fw's resource lock replaces mMutexNewKFs, mMutexReset, mMutexStop, mMutexAccept.
 //
-// Skeleton: the fields the tree's logic needs; the query scratch is filled in with the leaves.
+// The fields the tree's logic needs; the query scratch is filled in with the leaves.
 #include <cstdint>
 #include <deque>
 #include <list>
@@ -21,19 +21,18 @@ namespace local_mapping {
 
 enum class PendingReset { none, active_map, all };  // mbResetRequestedActiveMap / mbResetRequested
 
-// A keyframe's scratch (KeyFrame::mnBALocalForKF, mnBAFixedForKF, mnBAGlobalForKF and the
-// GBA results)
+// A keyframe's scratch (KeyFrame::mnBAGlobalForKF and the GBA results). mnBALocalForKF and mnBAFixedForKF only
+// matter within one LocalBundleAdjustment: sets in that call instead.
 struct KeyFrameScratch {
-    map::KeyFrameId ba_local_for = map::kNone, ba_fixed_for = map::kNone;
     map::KeyFrameId ba_global_for = map::kNone;
     geometry::SE3f Tcw_gba, Tcw_before_gba;
     Eigen::Vector3f velocity_gba = Eigen::Vector3f::Zero(), velocity_before_gba = Eigen::Vector3f::Zero();
     imu::Bias bias_gba;
 };
 
-// A map point's scratch (MapPoint::mnBALocalForKF, mnBAGlobalForKF, mPosGBA)
+// A map point's scratch (MapPoint::mnBAGlobalForKF, mPosGBA)
 struct PointScratch {
-    map::KeyFrameId ba_local_for = map::kNone, ba_global_for = map::kNone;
+    map::KeyFrameId ba_global_for = map::kNone;
     Eigen::Vector3f pos_gba = Eigen::Vector3f::Zero();
 };
 
@@ -42,6 +41,7 @@ enum class Waiting { none, local_ba, imu_init_inertial, imu_init_full };
 struct PendingOptimization {
     Waiting waiting = Waiting::none;
     std::uint64_t seq = 0;  // the problem's; a result with another one is dropped
+    map::MapId map = map::kNone;  // the problem's map (the write-back skips what left it)
     // initialize_imu: the keyframes in temporal order (vpKF), and the first one's timestamp (mFirstTs)
     std::vector<map::KeyFrameId> imu_keyframes;
     double first_ts = 0;

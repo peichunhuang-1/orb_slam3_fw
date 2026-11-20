@@ -9,8 +9,8 @@
 | 樹檔、圖檔、全部葉節點的埠與資源 | 完成，`fw check graphs/slam_job.graph.yaml` 通過（含環的規則） |
 | 簿記：`read_params`、`apply_tracking_edits`、`handle_mapper_command`、`publish_mapper_status`、`has_new_keyframe`、`queue_empty`、`ready_for_local_ba`、`enough_keyframes_for_ba`、`is_inertial_uninitialized`、`mapper_idle`、`reset_if_requested`、`send_to_loop_closing` | 已實作 |
 | `process_new_keyframe`（`ProcessNewKeyFrame`） | 已實作（`shared/process_keyframe`） |
-| `local_bundle_adjustment` | 只有流程：送出空的問題、等 `ba_result` 的序號、回傳 SUCCESS；動作窗、問題的內容與寫回是 TODO |
-| `ba_solver` | 只有流程：把問題原樣送回 |
+| `local_bundle_adjustment` | `LocalBundleAdjustment` 已實作（`local_bundle_adjustment/local_ba`：視窗、問題的複製、依 id 寫回）。`LocalInertialBA` 尚未做：IMU 初始化之後才會走到，目前直接 SUCCESS |
+| `ba_solver` | `local` 已實作（`ba_solver/local_ba`，解法器是 [`libs/nls/`](../../../libs/nls/problem.hpp)），與原版的 fixture 一致：`orb_local_mapping_local_ba_test`（`tests/fixtures/orb_slam3/local_ba`）。三種 inertial 的問題仍原樣送回 |
 | `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
 | `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
 | `search_in_neighbors`（`SearchInNeighbors`、`ORBmatcher::Fuse`） | 已實作（`search_in_neighbors/fuse`），與原版的 fixture 一致：`orb_local_mapping_fuse_test`（`tests/fixtures/orb_slam3/fuse`） |
@@ -27,6 +27,8 @@
 原版 `SearchInNeighbors` 要「融合到右相機」的兩次呼叫寫成 `Fuse(pKF, points, true)`，但簽名是 `Fuse(pKF, points, th = 3.0, bRight = false)`：`true` 變成 `th = 1`，實際上是再做一次左相機、半徑 1 的 Fuse，右相機從來沒有被融合。這是由 fixture 找到的（加上右相機的版本時，多替換約 10% 的點），port 照原樣重現，寫在 `fuse.hpp` 開頭。
 
 **加入 `keyframe_culling` 之後的實跑**（同上）：324 個 keyframe 裡刪掉 4 個。stereo-inertial 的門檻是 50%，大多數 local keyframe 都超過（近點裡 80–95% 是冗餘的），但 IMU 還沒初始化（`initialize_imu` 是空殼），所以只剩「前後 keyframe 相隔 < 0.5 s」與「IMU 位置離前一個 < 2 cm、相隔 < 3 s」兩條路，與原版在 IMU 初始化之前相同。
+
+**加入 local BA 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：整段沒有 reset 或新地圖的訊息。每次 BA 跑 5–10 次迭代，刪掉 40–160 個 outlier 觀測。視窗隨地圖變大：keyframe 20 時 21 個 keyframe、577 個點，keyframe 140 時 68 個、1,786 個點，keyframe 300 時 156 個、2,490 個點。在 Pi 5 上，前 220 次平均約 107 ms，keyframe 300 附近單次 0.7–1.9 s。視窗這麼大，是因為 IMU 沒有初始化（`initialize_imu` 是空殼），`KeyFrameCulling` 幾乎刪不掉 keyframe，V1_02 又一直在同一個房間裡，covisibility 只增不減。`lossless` 播放是同步的，BA 越慢，整段跑得越久：200 s 只到 keyframe 300 左右。
 
 原版 `KeyFrameCulling` 對右相機的特徵也讀 `mvDepth[i]`，但 `mvDepth` 只有 `Nleft` 個，是越界讀取；port 把右相機的特徵當作沒有深度（視同遠點，不計入），寫在 `culling.hpp` 開頭。inertial 時原版先把 keyframe 從 prev/next 鏈拿掉、把它的 preintegration 併入下一個，再呼叫 `SetBadFlag`；`not_erase` 的 keyframe 會因此留在地圖上但離開鏈，port 照樣重現。
 
@@ -162,7 +164,7 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 | **資源 `vocabulary`**（read） | ORB 詞彙樹 | `ProcessNewKeyFrame` 的 `ComputeBoW` |
 | **鍵** | `inertial`（樹的分支用，由 `receive_inputs` 依 `params.sensor` 寫入） | |
 
-**查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBALocalForKF`、`mnBAFixedForKF`、`mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。`mnFuseTargetForKF`、`mnFuseCandidateForKF` 只在一次 SearchInNeighbors 裡有意義（每個 keyframe 只當一次 current），所以改成該次呼叫裡的 set，不保存。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
+**查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。`mnFuseTargetForKF`、`mnFuseCandidateForKF` 只在一次 SearchInNeighbors 裡有意義（每個 keyframe 只當一次 current），`mnBALocalForKF`、`mnBAFixedForKF` 也只在一次 `LocalBundleAdjustment` 裡有意義，所以都改成該次呼叫裡的 set，不保存。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
 
 **鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。`atlas` 是 `versioned`，鎖與發布是分開的：寫入鎖持有到 tick 結束，但每個寫入 `atlas` 的葉節點回傳時就發布一個新版本（同一個 tick 裡後面的葉節點接著在它上面寫）。所以只讀 `atlas` 的葉節點要宣告成 `read`，否則每次都多一個空的版本。
 
@@ -274,7 +276,14 @@ ba_solver (algorithm class)
 
 `ba/Result` 依 id 列出新的狀態（位姿、速度、bias、點的位置），以及要刪除的觀測（outlier 的 `(keyframe, point)`，原版在寫回時 `EraseMapPointMatch`、`EraseObservation`）；`inertial_init` 另有 `Rwg`、scale、bias。
 
-**解法器**：這些是大型稀疏問題（local BA 約 20 個 keyframe、數千點；full inertial BA 是整張地圖）。依[原則](../../orb_tracking/docs/DESIGN.md#原則)不引入 g2o，自己寫 Levenberg-Marquardt 加 Schur complement（先消去點），照 g2o 的停止條件與阻尼更新；inertial 的邊與 tracking 的 `pose_inertial_optimizer` 同一套數學。見[待決定](#待決定)。
+**解法器**：這些是大型稀疏問題（local BA 數十個 keyframe、數千點；full inertial BA 是整張地圖）。依[原則](../../orb_tracking/docs/DESIGN.md#原則)不引入 g2o，解法器在 [`libs/nls/`](../../../libs/nls/problem.hpp)（見[待決定](#待決定)）。inertial 的邊之後與 tracking 的 `pose_inertial_optimizer` 用同一套數學。
+
+**`local` 與原版的對應**（`ba_solver/local_ba`、`local_bundle_adjustment/local_ba`）：
+- KB8 雙目沒有 `uRight`，所以沒有原版的 stereo 邊。左眼的特徵是 `EdgeSE3ProjectXYZ`（左相機），右眼的是 `EdgeSE3ProjectXYZToBody`（`Trl` 之後的右相機）。information 是特徵所在層的 1/σ²。
+- Huber 的 δ 是 `float(sqrt(5.991))`，δ² 存成 float，與 g2o 的 `RobustKernelHuber` 相同。
+- 地圖是 inertial 時初始 λ = 100（`setUserLambdaInit`），否則用 g2o 的 1e-5 × 對角線最大值。
+- outlier 的判定：最後一次算的誤差（g2o 把誤差留在最後一次嘗試的那一步，即使那一步被拒絕）chi2 > 5.991，或點在該相機後方。
+- 寫回時，點的參考 keyframe 若被刪掉觀測，原版從 `std::map<KeyFrame*, …>` 取第一個（依位址），port 依 id 取最小的，所以這些點的尺度範圍可能不同（fixture 測試不比較它們）。
 
 ## 介面的變更（tracking 端）
 
@@ -310,16 +319,19 @@ algorithms/
   orb_local_mapping/<葉節點>/
     create_new_map_points/       + SearchForTriangulation、epipolar 檢查、三角化          ~400
     search_in_neighbors/         + Fuse（keyframe ← 點、點 → keyframe）                  ~300
-    local_bundle_adjustment/     + 局部視窗與固定 keyframe 的選取、問題的建立、寫回          ~400
+    local_bundle_adjustment/     + 局部視窗與固定 keyframe 的選取、問題的建立、寫回          ~400   （local_ba：150，已做）
     initialize_imu/              + 三個階段、spanning tree 的修正傳遞                     ~450
     keyframe_culling/                                                                 ~150
     其餘約 15 個                  每個約 20–60 行                                        ~600
   orb_local_mapping/docs/DESIGN.md
   ba_solver/
-    ba_solver.cpp                block                                                 ~80    （空殼已建）
-    sparse_lm.hpp/.cpp           LM + Schur complement（點先消去）                         ~600
-    edges.hpp/.cpp               KB8 雙目重投影、IMU、random walk、先驗                    ~600
+    ba_solver.cpp                block                                                 ~50    （已做）
+    reprojection.hpp             KB8 重投影（左、右眼）                                     ~60    （已做）
+    local_ba.hpp/.cpp            local：ba::Problem → nls → ba::Result                    ~100   （已做）
+    edges.hpp/.cpp               IMU、random walk、先驗                                    ~500
     inertial_init.hpp/.cpp       InertialOptimization（Rwg、scale）                       ~300
+libs/nls/
+  problem.hpp/.cpp               LM + Schur complement、流形、Huber、稀疏 LDLT              ~870   （已做）
 graphs/slam_job.graph.yaml
 graphs/trees/local_mapping/*.tree.yaml
                                                                          合計約 4,500–5,000 行
@@ -331,7 +343,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 
 | 對象 | 內容 |
 |---|---|
-| `LocalBundleAdjustment` | 局部 keyframe、固定 keyframe、點與觀測、初始值 → 位姿、點、刪除的觀測 |
+| `LocalBundleAdjustment` | **已產生**（`local_ba/`）：16 與 6 個 keyframe 的小地圖（非 inertial、inertial 各一）→ 局部與固定的 keyframe、邊數、位姿、點、刪除的觀測、變 bad 的點 |
 | `LocalInertialBA` | 上述加速度、bias、預積分；`bLarge`、`bRecInit` 兩種 → 狀態、刪除的觀測 |
 | `InertialOptimization` | keyframe 的位姿與預積分、`Rwg`、scale、bias 的初值、priorG、priorA → `Rwg`、scale、bias、速度 |
 | `FullInertialBA` | 整張小地圖 → 狀態、點 |
@@ -349,7 +361,8 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | ~~`Repeat(-1)` 是否在同一個 tick 內迴圈~~ | 已實測：每輪讓出 tick，fw 自行補 tick，佇列照樣處理完 | 不需改設計 |
 | ~~同步部分讓 tracking 等多久~~ | **已定：不拆**。tracking 是 `versioned` 的讀取者，不等寫入鎖；`process_new_keyframe` 的結果在它回傳時就發布 | 只有之後 loop closing 也寫 `atlas` 時，它要等整個 tick；到時再量 |
 
-**非線性最小平方的函式庫（待定位置，建議 `libs/nls/`）**：純數學，只依賴 Eigen，不依賴 fw，建成 STATIC 函式庫連進 blocks 並有自己的單元測試。視覺與光達的 BA 共用，所以不照「最小的資料夾」放在 `ba_solver/` 下。
+**非線性最小平方的函式庫（已做，[`libs/nls/`](../../../libs/nls/problem.hpp)）**：純數學，只依賴 Eigen，不依賴 fw，建成 STATIC 函式庫連進 blocks，單元測試是 `nls_test`。視覺與光達的 BA 共用，所以不照「最小的資料夾」放在 `ba_solver/` 下。
 
-- 函式庫：參數區塊（含流形：歐式、SO3、SE3）、殘差區塊（解析 Jacobian）、robust kernel（Huber）、固定區塊、標記為可消去的區塊做 Schur complement（沒有可消去的區塊時直接解）、縮減系統用 Eigen 的稀疏 Cholesky、照 g2o 的 LM 阻尼更新與停止條件。
+- 函式庫：參數區塊（流形目前有歐式、SE3 的左乘更新；SO3 等 inertial 需要時再加，使用者也可以自己定義）、殘差區塊（解析 Jacobian）、robust kernel（Huber）、固定區塊、標記為可消去的區塊做 Schur complement（沒有可消去的區塊時直接解）、縮減系統用 Eigen 的稀疏 LDLT（AMD 排序，與 g2o 的 `LinearSolverEigen` 相同）、照 g2o 的 LM 阻尼更新與停止條件（含 ORB-SLAM3 加的「連續 3 次下降不到千分之一就停」）。
+- 速度：小矩陣的乘法用固定大小（2、3、6、9）的程式碼，各殘差的誤差、區塊指標與 Hessian 區塊放在連續的記憶體。合成的 60 個相機、1,800 個點、43,200 個殘差、9 次迭代，在 Pi 5 上約 0.3–0.37 s（最初的寫法是 0.85 s）。
 - `ba_solver` 自己的部分：重投影殘差（單目、雙目、KB8）、IMU 預積分殘差、bias random walk、先驗，以及 `ba::Problem` 與函式庫之間的轉換。光達 BA 之後寫自己的殘差，共用同一個解法器。

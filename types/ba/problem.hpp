@@ -4,7 +4,7 @@
 // writes the result back by id (algorithms/orb_local_mapping/docs/DESIGN.md, "鎖外計算"). A problem holds no
 // pointer into the atlas: the preintegrations and cameras are copies.
 //
-// Skeleton: the fields are what the four ORB-SLAM3 optimizations need; the solver fills them in later.
+// The fields are what the four ORB-SLAM3 optimizations need; `local` is solved, the inertial kinds not yet.
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -32,6 +32,7 @@ struct KeyFrameState {
     int rig = -1;  // index into Problem::rigs
     bool fixed = false;
     geometry::SE3f Tcw;
+    geometry::SE3f Trl;  // right camera from left (KeyFrame::GetRelativePoseTrl)
     // Inertial kinds
     bool inertial = false;
     geometry::SE3f T_cb;
@@ -67,6 +68,7 @@ struct Problem {
     std::vector<Observation> observations;
     // Options of the kind
     int iterations = 10;
+    double initial_lambda = 0;  // > 0: g2o's setUserLambdaInit; 0: 1e-5 · the largest diagonal
     bool large = false;     // LocalInertialBA bLarge
     bool rec_init = false;  // LocalInertialBA bRecInit
     float prior_g = 0, prior_a = 0;

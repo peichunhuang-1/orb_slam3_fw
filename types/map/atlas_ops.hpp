@@ -54,6 +54,7 @@ MapPointId createMapPoint(Atlas& a, const Eigen::Vector3f& pos, KeyFrameId ref_k
 void insertMapPoint(Atlas& a, MapPointId p);      // Atlas::AddMapPoint
 void addObservation(Atlas& a, MapPointId p, KeyFrameId kf, int index);
 void eraseObservation(Atlas& a, MapPointId p, KeyFrameId kf);  // bad when 2 or fewer remain
+void eraseMapPointMatch(Atlas& a, KeyFrameId kf, MapPointId p);  // KeyFrame::EraseMapPointMatch(pMP): both views
 void setPointBad(Atlas& a, MapPointId p);                     // MapPoint::SetBadFlag
 void replace(Atlas& a, MapPointId p, MapPointId by);           // MapPoint::Replace
 void computeDistinctiveDescriptors(Atlas& a, MapPointId p);

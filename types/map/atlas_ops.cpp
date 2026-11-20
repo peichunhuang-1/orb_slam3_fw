@@ -396,6 +396,16 @@ void addObservation(Atlas& a, MapPointId pid, KeyFrameId k, int index) {
     ++p->n_obs;  // two cameras: each feature counts one
 }
 
+void eraseMapPointMatch(Atlas& a, KeyFrameId k, MapPointId pid) {
+    const MapPoint* p = a.point(pid);
+    if (!p || !a.keyframe(k)) return;
+    const Observation o = p->indexIn(k);
+    if (o.left == -1 && o.right == -1) return;
+    KeyFrame* kf = a.editKeyFrame(k);
+    if (o.left != -1) kf->points[std::size_t(o.left)] = kNone;
+    if (o.right != -1) kf->points[std::size_t(o.right)] = kNone;
+}
+
 void eraseObservation(Atlas& a, MapPointId pid, KeyFrameId k) {
     const MapPoint* old = a.point(pid);
     if (!old || !old->observations.count(k)) return;

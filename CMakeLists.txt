@@ -16,10 +16,27 @@ find_package(tf2_msgs REQUIRED)
 find_package(mcap_vendor REQUIRED)  # euroc_mcap_driver reads .mcap files
 find_package(Eigen3 REQUIRED)
 
+# libs/nls: sparse non-linear least squares (Levenberg-Marquardt + Schur complement), Eigen only and fw-free.
+# Linked into the blocks (ba_solver); PIC because the blocks are a shared library.
+add_library(nls STATIC libs/nls/problem.cpp)
+target_include_directories(nls PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(nls PUBLIC Eigen3::Eigen)
+set_target_properties(nls PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(NOT CMAKE_BUILD_TYPE)
+  target_compile_options(nls PRIVATE -O2)
+endif()
+#   build/orb_slam3_fw/nls_test   libs/nls on synthetic problems (SE3 update, curve fit, BA Schur vs plain, Huber)
+add_executable(nls_test tests/nls/nls_test.cpp)
+target_link_libraries(nls_test nls)
+if(BUILD_TESTING)
+  add_test(NAME nls_test COMMAND nls_test)
+endif()
+
 # Builds every block under drivers/, algorithms/, types/, params/ and filesystem/plugins/ and writes the package's manifest.
 # Blocks using ROS 2 message types: fw_add_blocks(LIBRARIES fw::ros ${sensor_msgs_TARGETS}) after
 # find_package(sensor_msgs REQUIRED). _TARGETS brings the headers too; _LIBRARIES does not.
 fw_add_blocks(LIBRARIES
+  nls
   fw::ros
   fw::image
   Eigen3::Eigen
@@ -146,19 +163,22 @@ endforeach()
 #   new_map_points     create_new_map_points/triangulation vs tests/fixtures/orb_slam3/new_map_points
 #   fuse               search_in_neighbors/fuse vs tests/fixtures/orb_slam3/fuse
 #   keyframe_culling   keyframe_culling/culling on synthetic keyframes (bookkeeping)
+#   local_ba           local_bundle_adjustment/local_ba + ba_solver's local kind vs tests/fixtures/orb_slam3/local_ba
 set(ORB_LOCAL_MAPPING_TEST_TYPES types/map/atlas_ops.cpp types/map/bow_index.cpp types/map/vocabulary.cpp
     types/imu/preintegrated.cpp types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
 set(orb_local_mapping_map_point_culling_test_SOURCES algorithms/orb_local_mapping/map_point_culling/culling.cpp)
 set(orb_local_mapping_new_map_points_test_SOURCES algorithms/orb_local_mapping/create_new_map_points/triangulation.cpp)
 set(orb_local_mapping_fuse_test_SOURCES algorithms/orb_local_mapping/search_in_neighbors/fuse.cpp)
 set(orb_local_mapping_keyframe_culling_test_SOURCES algorithms/orb_local_mapping/keyframe_culling/culling.cpp)
-foreach(t map_point_culling new_map_points fuse keyframe_culling)
+set(orb_local_mapping_local_ba_test_SOURCES algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.cpp
+    algorithms/ba_solver/local_ba.cpp)
+foreach(t map_point_culling new_map_points fuse keyframe_culling local_ba)
   add_executable(orb_local_mapping_${t}_test tests/orb_local_mapping/${t}_test.cpp
                  ${orb_local_mapping_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
   target_include_directories(orb_local_mapping_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_definitions(orb_local_mapping_${t}_test PRIVATE
                              ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3")
-  target_link_libraries(orb_local_mapping_${t}_test Eigen3::Eigen opencv_core fw::core)
+  target_link_libraries(orb_local_mapping_${t}_test nls Eigen3::Eigen opencv_core fw::core)
   if(BUILD_TESTING)
     add_test(NAME orb_local_mapping_${t}_test COMMAND orb_local_mapping_${t}_test)
   endif()

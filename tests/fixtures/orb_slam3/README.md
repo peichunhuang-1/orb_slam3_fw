@@ -311,6 +311,51 @@ current, and each keyframe's previous one (`mPrevKF`) is the one before it.
 **Note:** the original calls `Fuse(pKF, points, true)` for the right camera. That binds `true` to `th`, not to
 `bRight`, so the second call is a left-camera fuse with th = 1. These outputs include that.
 
+## local_ba/
+
+`Optimizer::LocalBundleAdjustment` (local mapping's visual local BA). Made on 2026-11-20 by calling the
+original's own function on an atlas built from its own `KeyFrame` and `MapPoint` objects. The stop flag is
+false.
+
+**Scene:** K keyframes along the analytic trajectory, 0.1 s apart from t = 30 s. The last one is current
+(`pKF`), and each keyframe's previous one is the one before it. The map's init keyframe is keyframe 0.
+- **Scene points** each live over a span of 3–8 consecutive keyframes. They are generated in front of the
+  span's middle keyframe, 1.5–8 m away. Each keyframe of the span that projects the point sees it in the left
+  view, the right view or both, at an octave that fits the distance. A scene point seen by at least two
+  keyframes becomes one map point. Keyframes far from the current one share few points with it, so they are
+  not covisible: they become the fixed cameras.
+- **Noise:** the initial poses (all but keyframe 0's) are about 0.3° and 1.2 cm (σ per axis) off the true
+  ones. The points are 3 cm (σ per axis) off. Pixels have 0.7 σ of the octave's scale of noise, and 4 % of the
+  observations are 12–20 px off.
+- **Descriptors** are random bytes. Each map point's descriptor, normal and scale range come from the original's
+  `ComputeDistinctiveDescriptors` and `UpdateNormalAndDepth`.
+- **Distractors:** each keyframe has 20 more features without a point.
+
+**Inputs**
+- `inertial`, `n_keyframes` and `init_kf`.
+- Per keyframe k, under `kfk_`: `Tcw` (the initial pose), `Tcw_true`, `timestamp`, `kp_left` and `kp_right`
+  (x y octave), and `desc` (N x 32, left then right, in frame index order).
+- `before_points`: per map point, its reference keyframe and its initial x y z.
+- `before_kfk_points`: per frame index, the map point (a row of `before_points`) or -1.
+
+**Outputs**
+- `local`: the optimized keyframes (`lLocalKeyFrames`), ascending; an init keyframe among them is held fixed.
+  `fixed`: the fixed cameras (`lFixedCameras`), ascending.
+- `n_fixed` (`num_fixedKF`: the fixed cameras plus 1 when the init keyframe is local) and `n_edges`.
+- `after_kfk_Tcw` and `after_kfk_points`: the poses and the point of each feature after the BA. An erased
+  outlier observation shows as -1.
+- `after_points`: per map point: bad, `nObs`, x y z, normal x y z, then `mfMinDistance` and `mfMaxDistance`.
+
+**Cases:**
+- `stereo`: 16 keyframes; the map is not inertial, so g2o picks the initial lambda (1e-5 · the largest
+  diagonal). 7 local keyframes, 7 fixed ones; keyframe 0 is in neither.
+- `inertial`: 6 keyframes; the map is inertial, so `setUserLambdaInit(100)`. Every keyframe is local, and
+  keyframe 0 is held fixed as the init keyframe.
+
+**Reproducibility:** the original iterates observations in `std::map<KeyFrame*, …>` order, that is by heap
+address. Regenerating can change the edge order and so the last bits of the sums. The same goes for `fuse/`,
+where a tied descriptor choice can also flip.
+
 ## Not here
 
 No full-sequence trajectory from the original: the port's trajectory is checked against the recordings' ground

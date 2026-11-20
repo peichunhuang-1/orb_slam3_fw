@@ -1,13 +1,15 @@
 // local_bundle_adjustment: the local BA of Run(), computed outside the lock (docs/DESIGN.md, "鎖外計算").
 //   start:   skipped (SUCCESS) when mbAbortBA is already set, as the original's return before optimize().
-//            Inertial with the IMU initialized: mTinit accumulates; too little motion before BA2 requests the
-//            active map's reset and sets mbBadImu; the problem is LocalInertialBA's (bLarge: tracking's inliers
-//            > 100, bRecInit: !BA2). Otherwise LocalBundleAdjustment's. The problem is copied out and sent;
-//            RUNNING.
-//   running: the result with the problem's seq is written back by id (poses, velocities, biases, points; the
-//            outlier observations erased; what went bad or left the map meanwhile skipped); SUCCESS. Other
-//            ticks (keyframes, commands arriving meanwhile): RUNNING.
+//            Inertial with the IMU initialized: LocalInertialBA (TODO: mTinit accumulates; too little motion
+//            before BA2 requests the active map's reset and sets mbBadImu; bLarge: tracking's inliers > 100,
+//            bRecInit: !BA2); for now skipped (SUCCESS). Otherwise LocalBundleAdjustment's window and problem
+//            (local_ba.hpp); no fixed keyframe: SUCCESS without optimizing, as the original. The problem is
+//            copied out and sent; RUNNING.
+//   running: the result with the problem's seq is written back by id (local_ba.hpp: the outlier observations
+//            erased, poses, points; what went bad or left the map meanwhile skipped); SUCCESS. Other ticks
+//            (keyframes, commands arriving meanwhile): RUNNING.
 //   halted:  the result still on its way is dropped (its seq no longer matches).
+#include "algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.hpp"
 #include "fw/fw.hpp"
 #include "types/ba/problem.hpp"
 #include "types/local_mapping/local_mapper.hpp"
@@ -29,18 +31,19 @@ public:
         local_mapping::LocalMapper& m = *mapper;
         if (m.abort_ba) return Status::SUCCESS;
 
-        // TODO the inertial motion check, the local window and the fixed keyframes, the copy of the problem
-        const map::Map* map = nullptr;
-        if (const map::KeyFrame* kf = atlas->goodKeyFrame(m.current)) map = atlas->findMap(kf->map);
-        ba::Problem p;
-        p.seq = m.next_seq++;
-        p.kind = inertial && map && map->imu_initialized ? ba::Kind::local_inertial : ba::Kind::local;
-        p.map = map ? map->id : map::kNone;
-        p.main_keyframe = m.current;
+        const map::KeyFrame* kf = atlas->goodKeyFrame(m.current);
+        const map::Map* map = kf ? atlas->findMap(kf->map) : nullptr;
+        if (!map) return Status::SUCCESS;
+        if (inertial && map->imu_initialized) return Status::SUCCESS;  // TODO LocalInertialBA
+
+        std::optional<ba::Problem> p = orb_local_mapping::localBAProblem(*atlas, m.current);
+        if (!p) return Status::SUCCESS;
+        p->seq = m.next_seq++;
         m.pending = local_mapping::PendingOptimization{};
         m.pending.waiting = local_mapping::Waiting::local_ba;
-        m.pending.seq = p.seq;
-        ba_problem = std::move(p);
+        m.pending.seq = p->seq;
+        m.pending.map = p->map;
+        ba_problem = std::move(*p);
         return Status::RUNNING;
     }
 
@@ -48,7 +51,8 @@ public:
                    fw::Write<local_mapping::LocalMapper> mapper) {
         local_mapping::LocalMapper& m = *mapper;
         if (!ba_result.has_value() || ba_result->seq != m.pending.seq) return Status::RUNNING;
-        (void)atlas;  // TODO write back by id
+        if (ba_result->kind == ba::Kind::local && ba_result->ok)
+            orb_local_mapping::applyLocalBA(*atlas, m.pending.map, *ba_result);
         m.pending = local_mapping::PendingOptimization{};
         return Status::SUCCESS;
     }
