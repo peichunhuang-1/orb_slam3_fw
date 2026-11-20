@@ -284,4 +284,10 @@ void BodyReprojectionResidual::evaluate(const double* const* x, double* e, doubl
     if (J[1]) assign<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>>(J[1], -pj * Rcw);
 }
 
+double BodyReprojectionResidual::depth(const double* pose, const double* point) const {
+    const Pose P(pose);
+    const Eigen::Map<const Vec3> Xw(point);
+    return (Rcb_ * (P.R.transpose() * (Xw - P.t)) + tcb_).z();
+}
+
 }  // namespace ba_solver

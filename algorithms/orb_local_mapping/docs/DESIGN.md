@@ -9,8 +9,8 @@
 | 樹檔、圖檔、全部葉節點的埠與資源 | 完成，`fw check graphs/slam_job.graph.yaml` 通過（含環的規則） |
 | 簿記：`read_params`、`apply_tracking_edits`、`handle_mapper_command`、`publish_mapper_status`、`has_new_keyframe`、`queue_empty`、`ready_for_local_ba`、`enough_keyframes_for_ba`、`is_inertial_uninitialized`、`mapper_idle`、`reset_if_requested`、`send_to_loop_closing` | 已實作 |
 | `process_new_keyframe`（`ProcessNewKeyFrame`） | 已實作（`shared/process_keyframe`） |
-| `local_bundle_adjustment` | `LocalBundleAdjustment` 已實作（`local_bundle_adjustment/local_ba`：視窗、問題的複製、依 id 寫回）。IMU 初始化之後的 `mTinit` 累加、移動不足時的重設與 `mbBadImu` 已實作；`LocalInertialBA` 尚未做，暫時以 `LocalBundleAdjustment` 代替 |
-| `ba_solver` | `local`（`ba_solver/local_ba`）、`inertial_init` 與 `full_inertial`（`ba_solver/inertial`，邊在 `inertial_residuals`）已實作，解法器是 [`libs/nls/`](../../../libs/nls/problem.hpp)；與原版的 fixture 比對：`orb_local_mapping_local_ba_test`、`orb_local_mapping_imu_init_test`。`local_inertial` 仍原樣送回 |
+| `local_bundle_adjustment` | `LocalBundleAdjustment` 已實作（`local_bundle_adjustment/local_ba`：視窗、問題的複製、依 id 寫回）。IMU 初始化之後的 `mTinit` 累加、移動不足時的重設與 `mbBadImu`，以及 `LocalInertialBA` 的視窗（`localInertialBAProblem`）已實作 |
+| `ba_solver` | 四種都已實作：`local`（`ba_solver/local_ba`）、`local_inertial`（`ba_solver/local_inertial`）、`inertial_init` 與 `full_inertial`（`ba_solver/inertial`），慣性的邊在 `inertial_residuals`，解法器是 [`libs/nls/`](../../../libs/nls/problem.hpp)；與原版的 fixture 比對：`orb_local_mapping_local_ba_test`、`orb_local_mapping_local_inertial_ba_test`、`orb_local_mapping_imu_init_test` |
 | `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
 | `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
 | `search_in_neighbors`（`SearchInNeighbors`、`ORBmatcher::Fuse`） | 已實作（`search_in_neighbors/fuse`），與原版的 fixture 一致：`orb_local_mapping_fuse_test`（`tests/fixtures/orb_slam3/fuse`） |
@@ -34,7 +34,14 @@
 - 第一次 IMU 初始化在 keyframe 9（10 個 keyframe、2.35 s）。`InertialOptimization` 約 1 ms，`FullInertialBA`（389 點）12 ms。gyro bias 估為 (-0.0026, 0.017, 0.074)，VIBA 2 之後是 (-0.0026, 0.021, 0.076)，與 V1_02 已知的 gyro bias 相近。
 - VIBA 1 在 `mTinit` = 5 s、VIBA 2 在 15 s 觸發，`FullInertialBA` 分別是 596 點 66 ms、1,159 點 92 ms。整段沒有 reset 或 LOST。
 - IMU 初始化之後 `KeyFrameCulling` 生效，地圖維持在 65–78 個 keyframe（之前到 300 個以上），local BA 的視窗也跟著變小。200 s 內跑到 `mTinit` 72 s，接近整段序列（之前只到 keyframe 300 左右）。
-- `LocalInertialBA` 還沒做，IMU 初始化之後由 `LocalBundleAdjustment` 代替：keyframe 的速度與 bias 只在 VIBA 時更新。
+- 當時 `LocalInertialBA` 還沒做，IMU 初始化之後由 `LocalBundleAdjustment` 代替：keyframe 的速度與 bias 只在 VIBA 時更新。
+
+**加入 `LocalInertialBA` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：IMU 初始化之前的 8 次是 `LocalBundleAdjustment`，之後 343 次全是 `LocalInertialBA`，全部通過收斂檢查（沒有 "FAIL LOCAL-INERTIAL BA"），整段沒有 reset。tracking 的 inlier 幾乎都超過 100，所以多半是 `bLarge`：視窗 25 個 keyframe、650–1,700 個點、4 次迭代，每次刪掉 30–120 個 outlier 觀測。在 Pi 5 上平均 45 ms、最多 69 ms。200 s 內跑到 keyframe 352。
+
+`LocalInertialBA` 與原版的差異（都寫在 `local_ba.hpp` 開頭）：
+- 原版用 `MapPoint::mTrackDepth`（tracking 上次投影該點時的距離）決定 outlier 門檻要不要放寬（< 10 m 時 chi2 門檻乘 1.5）。這是 tracking 的暫存，local mapping 看不到；port 改用該點到目前 keyframe 相機中心的距離。fixture 也照這個規則設定 `mTrackDepth`，所以比對時兩邊相同。
+- 一個點的觀測，原版依 `KeyFrame*` 位址排序，port 依 id。從點的觀測挑出額外的固定 keyframe 時，每個點只取第一個，所以順序會影響結果。fixture 生成器把 keyframe 放在同一塊連續記憶體裡，讓位址順序與 id 順序相同。
+- 原版重現的細節：右相機觀測的資訊矩陣，用的是同一點在左相機特徵的 octave，沒有左相機特徵時用 octave 0（原版讀的是預設建構的 `KeyPoint`）。每條 IMU 邊的 preintegration 先 `SetNewBias(上一個 keyframe 的 bias)`：port 在建問題時直接改 atlas，BA 失敗時這個改動一樣會留下來。
 
 原版 `KeyFrameCulling` 對右相機的特徵也讀 `mvDepth[i]`，但 `mvDepth` 只有 `Nleft` 個，是越界讀取；port 把右相機的特徵當作沒有深度（視同遠點，不計入），寫在 `culling.hpp` 開頭。inertial 時原版先把 keyframe 從 prev/next 鏈拿掉、把它的 preintegration 併入下一個，再呼叫 `SetBadFlag`；`not_erase` 的 keyframe 會因此留在地圖上但離開鏈，port 照樣重現。
 
@@ -276,7 +283,7 @@ ba_solver (algorithm class)
 | kind | 原版 | 頂點 | 邊 |
 |---|---|---|---|
 | `local` | `LocalBundleAdjustment` | 局部 keyframe 的位姿（固定的另列）、map point | KB8 雙目的重投影（左、右眼各一條）、Huber |
-| `local_inertial` | `LocalInertialBA` | 時間窗內 keyframe 的位姿、速度、bias；固定的上一個；covisible 的位姿固定；map point | 重投影、IMU 預積分、gyro／acc random walk；`bLarge`、`bRecInit` |
+| `local_inertial` | `LocalInertialBA` | 時間窗內 keyframe 的位姿、速度、bias；固定的上一個；看到這些點的其他 keyframe 位姿固定；map point | 重投影、IMU 預積分、gyro／acc random walk；`bLarge`、`bRecInit` |
 | `inertial_init` | `InertialOptimization(Rwg, scale, bg, ba, …, priorG, priorA)` | 每個 keyframe 的速度、共用的 bias、`Rwg`、scale；位姿固定 | IMU 預積分、bias 先驗 |
 | `full_inertial` | `FullInertialBA(map, 100, …, priorG, priorA)` | 整張地圖的 keyframe 狀態與 map point | 重投影、IMU、bias 先驗（priorA ≠ 0） |
 
@@ -342,7 +349,7 @@ algorithms/
   orb_local_mapping/<葉節點>/
     create_new_map_points/       + SearchForTriangulation、epipolar 檢查、三角化          ~400
     search_in_neighbors/         + Fuse（keyframe ← 點、點 → keyframe）                  ~300
-    local_bundle_adjustment/     + 局部視窗與固定 keyframe 的選取、問題的建立、寫回          ~400   （local_ba：150，已做）
+    local_bundle_adjustment/     + 局部視窗與固定 keyframe 的選取、問題的建立、寫回          ~400   （local_ba：300，已做）
     initialize_imu/              + 三個階段、spanning tree 的修正傳遞                     ~450   （imu_init：380，已做）
     keyframe_culling/                                                                 ~150
     其餘約 15 個                  每個約 20–60 行                                        ~600
@@ -353,6 +360,7 @@ algorithms/
     local_ba.hpp/.cpp            local：ba::Problem → nls → ba::Result                    ~100   （已做）
     inertial_residuals.hpp/.cpp  流形與邊：IMU、random walk、先驗、body 位姿的重投影        ~420   （已做）
     inertial.hpp/.cpp            inertial_init、full_inertial                             ~230   （已做）
+    local_inertial.hpp/.cpp      local_inertial                                           ~170   （已做）
 libs/nls/
   problem.hpp/.cpp               LM + Schur complement、流形、Huber、稀疏 LDLT              ~870   （已做）
 graphs/slam_job.graph.yaml
@@ -367,7 +375,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | 對象 | 內容 |
 |---|---|
 | `LocalBundleAdjustment` | **已產生**（`local_ba/`）：16 與 6 個 keyframe 的小地圖（非 inertial、inertial 各一）→ 局部與固定的 keyframe、邊數、位姿、點、刪除的觀測、變 bad 的點 |
-| `LocalInertialBA` | 上述加速度、bias、預積分；`bLarge`、`bRecInit` 兩種 → 狀態、刪除的觀測 |
+| `LocalInertialBA` | **已產生**（`local_inertial_ba/`）：14–16 個 keyframe 的 stereo-inertial 小地圖（重力已對齊），三個案例（`bLarge`；兩者皆否；`bRecInit`）→ 最佳化與固定的 keyframe、局部點、是否通過收斂檢查、位姿、速度、bias（含 preintegration 的 updated bias）、點、刪除的觀測、變 bad 的點 |
 | `InitializeIMU`（含 `InertialOptimization`、`ApplyScaledRotation`、`FullInertialBA`） | **已產生**（`imu_init/`）：12–14 個 keyframe 的 stereo-inertial 小地圖，三個案例（第一次初始化、VIBA 1、VIBA 2）→ 重力方向與速度的初值、`InertialOptimization` 的結果、寫回與 `ApplyScaledRotation` 之後的狀態、`FullInertialBA` 的結果、期間加入的 keyframe 處理之後沿 spanning tree 修正的最終狀態 |
 | `CreateNewMapPoints` 的三角化 | **已產生**（`new_map_points/`）：六個 keyframe 的小地圖 → covisibility 的順序、每個鄰居的 `SearchForTriangulation`、新點（keyframe、索引、位置） |
 | `Fuse` | **已產生**（`fuse/`）：十四個 keyframe、含重複點的小地圖 → 融合的目標、每個 keyframe 的點、每個點的 bad／replaced／計數／描述子、covisibility |

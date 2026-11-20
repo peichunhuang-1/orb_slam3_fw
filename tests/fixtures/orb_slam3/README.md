@@ -356,6 +356,50 @@ false.
 address. Regenerating can change the edge order and so the last bits of the sums. The same goes for `fuse/`,
 where a tied descriptor choice can also flip.
 
+## local_inertial_ba/
+
+`Optimizer::LocalInertialBA` (local mapping's local BA once the IMU is initialized). Made on 2026-11-20 by calling
+the original's own function on an atlas built from its own `KeyFrame` and `MapPoint` objects. The map is
+gravity aligned, inertial and IMU initialized, with BA1 done. BA2 is done except in `rec_init`.
+
+**Scene:** K keyframes along the analytic trajectory, 0.2 s apart from t = 40 s. The last one is current
+(`pKF`), and each keyframe's previous one is the one before it. Every keyframe has `bImu`.
+- **IMU:** each keyframe has a velocity (true + 2 cm/s σ) and its own bias (true + 0.002 / 0.03 σ). Its
+  preintegration from the previous keyframe is integrated from the trajectory's IMU samples at `lin_bias`, near
+  the previous keyframe's bias. Then `SetNewBias(bias)` is called, so the preintegration's updated bias is the
+  keyframe's own.
+- **Scene points** span 3–8 keyframes, as in `local_ba/`, and are 1.5–11 m from the span's middle keyframe. A
+  right observation's octave may differ by one from the left one's. 3 % of the observations are 12–20 px off.
+- **Noise:** poses are about 0.1° and 5 mm off, points 3 cm off.
+- **`mTrackDepth`** (tracking's) is set to the point's distance from the current keyframe's camera centre. The
+  port uses the same rule.
+- **Addresses:** the keyframes are placement-new'ed into one block, so their addresses ascend with their ids.
+  The generator checks this. The original picks a fixed keyframe per point from its observations in
+  `KeyFrame*` order, and the port in id order, so the two orders must agree.
+
+**Inputs**
+- `large`, `rec_init` (the `bLarge`, `bRecInit` arguments), `n_keyframes`.
+- Per keyframe k, under `kfk_`: `Tcw`, `timestamp`, `velocity`, `bias` and `lin_bias` (gyro, acc), `meas`
+  (keyframe 0's is empty), `kp_left`, `kp_right`, `desc`.
+- `before_points`: per map point, its reference keyframe, x y z and `mTrackDepth`. `before_kfk_points` gives,
+  per frame index, the map point or -1.
+
+**Outputs**
+- `ok`: whether the function got past its convergence check and wrote back.
+- `optimized` and `fixed` (both ascending) and `local_points` (rows of `before_points`). The generator sets
+  every keyframe's and point's `mnBALocalForKF` / `mnBAFixedForKF` to a sentinel first, then reads these marks
+  back after the call.
+- Per keyframe, under `after_kfk_`: `Tcw`, `velocity`, `bias`, and `preint_bias` (its preintegration's
+  `GetUpdatedBias`). `after_kfk_points` and `after_points` have the same format as in `local_ba/`.
+
+**Cases:**
+- `large`: 14 keyframes, `bLarge`. 12 optimized (min(K − 2, 25)), 2 fixed, 4 iterations from λ = 1e-2.
+- `small`: 16 keyframes. 10 optimized, 6 fixed, 10 iterations at most from λ = 1.
+- `rec_init`: as `small`, with `bRecInit`, so every inertial edge has the Huber kernel.
+
+None of the cases fails the convergence check. That path, and the `SetNewBias(previous keyframe's bias)` it
+leaves on the preintegrations, is not covered.
+
 ## Not here
 
 No full-sequence trajectory from the original: the port's trajectory is checked against the recordings' ground

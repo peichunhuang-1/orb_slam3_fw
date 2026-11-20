@@ -2,12 +2,12 @@
 //   start:   skipped (SUCCESS) when mbAbortBA is already set, as the original's return before optimize().
 //            Inertial with the IMU initialized: mTinit accumulates (the last two steps moved > 5 cm), and
 //            before BA2 too little motion (< 2 cm while mTinit < 10) requests the active map's reset and sets
-//            mbBadImu; then LocalInertialBA (TODO: bLarge = tracking's inliers > 100, bRecInit = !BA2): for now
-//            LocalBundleAdjustment stands in for it. LocalBundleAdjustment: its window and problem (local_ba.hpp);
-//            no fixed keyframe: SUCCESS without optimizing, as the original. The problem is copied out and sent;
-//            RUNNING.
+//            mbBadImu; then LocalInertialBA (bLarge: tracking's last inliers > 100; bRecInit: BA2 not done yet).
+//            Otherwise LocalBundleAdjustment; no fixed keyframe: SUCCESS without optimizing, as the original.
+//            Windows and problems: local_ba.hpp. The problem is copied out and sent; RUNNING.
 //   running: the result with the problem's seq is written back by id (local_ba.hpp: the outlier observations
-//            erased, poses, points; what went bad or left the map meanwhile skipped); SUCCESS. Other ticks
+//            erased, poses, velocities and biases, points; what went bad or left the map meanwhile skipped);
+//            a local_inertial result that is not ok (FAIL LOCAL-INERTIAL BA) writes nothing; SUCCESS. Other ticks
 //            (keyframes, commands arriving meanwhile): RUNNING.
 //   halted:  the result still on its way is dropped (its seq no longer matches).
 #include "algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.hpp"
@@ -27,7 +27,6 @@ public:
     Status start(const bool& inertial, fw::Optional<const tracking::Status&> tracking, fw::Write<map::Atlas> atlas,
                  fw::Write<local_mapping::LocalMapper> mapper, fw::Optional<ba::Problem>& ba_problem,
                  fw::Optional<tracking::MapperStatus>& status) {
-        (void)tracking;
         (void)status;
         local_mapping::LocalMapper& m = *mapper;
         if (m.abort_ba) return Status::SUCCESS;
@@ -35,6 +34,7 @@ public:
         const map::KeyFrame* kf = atlas->goodKeyFrame(m.current);
         const map::Map* map = kf ? atlas->findMap(kf->map) : nullptr;
         if (!map) return Status::SUCCESS;
+        std::optional<ba::Problem> p;
         if (inertial && map->imu_initialized) {
             const map::KeyFrame* prev = atlas->keyframe(kf->prev);
             const map::KeyFrame* prev2 = prev ? atlas->keyframe(prev->prev) : nullptr;
@@ -49,10 +49,12 @@ public:
                     m.bad_imu = true;
                 }
             }
-            // TODO LocalInertialBA; LocalBundleAdjustment meanwhile
+            const bool large = tracking.has_value() && tracking->inliers > 100;
+            const bool rec_init = !map->imu_ba2;
+            p = orb_local_mapping::localInertialBAProblem(*atlas, m.current, large, rec_init);
+        } else {
+            p = orb_local_mapping::localBAProblem(*atlas, m.current);
         }
-
-        std::optional<ba::Problem> p = orb_local_mapping::localBAProblem(*atlas, m.current);
         if (!p) return Status::SUCCESS;
         p->seq = m.next_seq++;
         m.pending = local_mapping::PendingOptimization{};
@@ -67,7 +69,7 @@ public:
                    fw::Write<local_mapping::LocalMapper> mapper) {
         local_mapping::LocalMapper& m = *mapper;
         if (!ba_result.has_value() || ba_result->seq != m.pending.seq) return Status::RUNNING;
-        if (ba_result->kind == ba::Kind::local && ba_result->ok)
+        if ((ba_result->kind == ba::Kind::local || ba_result->kind == ba::Kind::local_inertial) && ba_result->ok)
             orb_local_mapping::applyLocalBA(*atlas, m.pending.map, *ba_result);
         m.pending = local_mapping::PendingOptimization{};
         return Status::SUCCESS;

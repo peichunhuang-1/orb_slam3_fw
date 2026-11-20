@@ -4,8 +4,7 @@
 // writes the result back by id (algorithms/orb_local_mapping/docs/DESIGN.md, "鎖外計算"). A problem holds no
 // pointer into the atlas: the preintegrations and cameras are copies.
 //
-// The fields are what the four ORB-SLAM3 optimizations need; `local`, `inertial_init` and `full_inertial` are
-// solved, `local_inertial` not yet.
+// The fields are what the four ORB-SLAM3 optimizations need.
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -47,6 +46,7 @@ struct PointState {
     map::MapPointId id = map::kNone;
     Eigen::Vector3f pos = Eigen::Vector3f::Zero();
     bool fixed = false;
+    bool close = false;  // local_inertial: stands for mTrackDepth < 10 m (a looser outlier threshold)
 };
 
 // One feature of a keyframe that sees a point
@@ -83,7 +83,7 @@ struct Problem {
 struct Result {
     std::uint64_t seq = 0;
     Kind kind = Kind::local;
-    bool ok = false;
+    bool ok = false;  // false: nothing to write back (local_inertial: "FAIL LOCAL-INERTIAL BA")
     std::vector<KeyFrameState> keyframes;  // id, Tcw, velocity and bias when inertial (no preintegration)
     std::vector<PointState> points;        // id, pos
     struct Erase {

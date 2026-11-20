@@ -106,6 +106,8 @@ public:
                              const Eigen::Vector2d& uv);
     int size() const override { return 2; }
     void evaluate(const double* const* blocks, double* e, double* const* jacobians) const override;
+    // The point's depth in this camera (isDepthPositive)
+    double depth(const double* pose, const double* point) const;
 
 private:
     const camera::KannalaBrandt8* camera_;
