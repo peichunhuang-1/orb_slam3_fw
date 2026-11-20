@@ -8,6 +8,7 @@ inputs:
 outputs:
   state:      { type: tracking/State }
   pose:       { type: fw/PoseStamped }
+  map_to_odom: { type: fw/TransformStamped }
   tracking:   { type: tracking/Status }
   atlas_edits: { type: tracking/AtlasEdits }
   mapper_cmd: { type: tracking/MapperCommand }
@@ -29,4 +30,4 @@ root:
                          params: "{params}", mapper: "{mapper}", state: "{state}",
                          atlas_edits: "{atlas_edits}", mapper_cmd: "{mapper_cmd}" }
       # mlRelativeFramePoses... (OK / RECENTLY_LOST), pose and status out
-      - publish_frame: { state: "{state}", pose: "{pose}", tracking: "{tracking}" }
+      - publish_frame: { state: "{state}", pose: "{pose}", map_to_odom: "{map_to_odom}", tracking: "{tracking}" }

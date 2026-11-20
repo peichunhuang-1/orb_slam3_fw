@@ -1,6 +1,6 @@
 # orb_local_mapping 設計：以行為樹實作 ORB-SLAM3 的 local mapping
 
-這份文件只定架構：圖上怎麼連、資料放在哪裡、樹的邏輯、鎖怎麼拿。演算法的部分目前是空殼，架構確認後再填。
+這份文件定架構（圖上怎麼連、資料放在哪裡、樹的邏輯、鎖怎麼拿），並記錄各演算法與原版的對照與驗證。`LocalMapping::Run()` 的每一步都已實作；只有 `Stop()`／`Release()` 跟 loop closing 一起做。
 
 **目前的狀態**：
 
@@ -37,6 +37,16 @@
 - 當時 `LocalInertialBA` 還沒做，IMU 初始化之後由 `LocalBundleAdjustment` 代替：keyframe 的速度與 bias 只在 VIBA 時更新。
 
 **加入 `LocalInertialBA` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：IMU 初始化之前的 8 次是 `LocalBundleAdjustment`，之後 343 次全是 `LocalInertialBA`，全部通過收斂檢查（沒有 "FAIL LOCAL-INERTIAL BA"），整段沒有 reset。tracking 的 inlier 幾乎都超過 100，所以多半是 `bLarge`：視窗 25 個 keyframe、650–1,700 個點、4 次迭代，每次刪掉 30–120 個 outlier 觀測。在 Pi 5 上平均 45 ms、最多 69 ms。200 s 內跑到 keyframe 352。
+
+**整條軌跡的 ATE**（`fw launch` 之後 `python3 tools/ate.py --frame map`；`slam_job` 以 tap 錄下 `tracking.pose`、`tracking.map_to_odom` 與 bag 的 `groundtruth`，見 [`tools/ate.py`](../../../tools/ate.py)）：V1_02_medium 整段跑完（約 5.5 分鐘，lockstep 回放；job 不會自己結束，見已知問題，用 `timeout -s INT 330`），1,620 個追蹤到的影格裡有 1,601 個配對到 ground truth。這裡是 atlas 座標系（`map`）裡的即時位姿，也就是原版的即時輸出；連續的 `odom` 輸出見 tracking 設計的[輸出的座標系](../../orb_tracking/docs/DESIGN.md#輸出的座標系odom-與-map)。以 SE3 對齊：
+
+| 起點 | RMSE | 中位數 | 最大 |
+|---|---|---|---|
+| 從頭（3.5 s 起） | 0.138 m | 0.054 m | 1.39 m |
+| `--from 10` | 0.045 m | 0.021 m | 0.149 m |
+| `--from 20` | 0.027 m | 0.019 m | 0.093 m |
+
+Sim3 對齊的尺度是 1.003–1.005。這裡算的是每個影格當下的位姿，不是原版存檔時透過最佳化後的 keyframe 重新換算的軌跡。IMU 初始化與 VIBA 1、2 會以 `applyScaledRotation` 移動整張地圖，所以在那之前送出的位姿位在舊的世界座標系，一次對齊對不齊（5.85 s 時位姿跳了 1.26 m）。前 10 秒的大誤差就是這個原因，不是追蹤的誤差。
 
 `LocalInertialBA` 與原版的差異（都寫在 `local_ba.hpp` 開頭）：
 - 原版用 `MapPoint::mTrackDepth`（tracking 上次投影該點時的距離）決定 outlier 門檻要不要放寬（< 10 m 時 chi2 門檻乘 1.5）。這是 tracking 的暫存，local mapping 看不到；port 改用該點到目前 keyframe 相機中心的距離。fixture 也照這個規則設定 `mTrackDepth`，所以比對時兩邊相同。
@@ -251,7 +261,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `handle_mapper_command` | action | `mapper_cmd` | local_mapper w | `InterruptBA` |
 | `publish_mapper_status` | action | `mapper` out | atlas r、local_mapper r | tracking 讀的 `AcceptKeyFrames`、`KeyframesInQueue`、`IsInitializing`、`isStopped`、`stopRequested`、`mbBadImu`、`mbFarPoints` |
 | `has_new_keyframe` | condition | | local_mapper r | `CheckNewKeyFrames() && !mbBadImu` |
-| `mapper_idle` | action | `mapper` out | atlas w、local_mapper w | `Stop()`（之後）、`ResetIfRequested`、`SetAcceptKeyFrames(true)` |
+| `mapper_idle` | action | `mapper` out | local_mapper w | `Stop()`（之後，只改 local_mapper 的旗標）、`ResetIfRequested`、`SetAcceptKeyFrames(true)` |
 | `process_new_keyframe` | action | | atlas w、local_mapper w、vocabulary r | `ProcessNewKeyFrame`、`SetAcceptKeyFrames(false)` |
 | `map_point_culling` | action | | atlas w、local_mapper w | `MapPointCulling` |
 | `create_new_map_points` | action | `tracking` Optional | atlas w、local_mapper w | `CreateNewMapPoints`（`SearchForTriangulation`、三角化）；結束時 `mbAbortBA = false` |
@@ -265,7 +275,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `keyframe_culling` | action | | atlas w、local_mapper r | `KeyFrameCulling` |
 | `begin_inertial_ba` | action | `stage` 常值、`inertial`、`tracking` Optional | atlas w、local_mapper r | VIBA 的條件與 `SetIniertialBA1/2` |
 | `send_to_loop_closing` | action | `loop_keyframe` out | atlas r、local_mapper r | `mpLoopCloser->InsertKeyFrame` |
-| `reset_if_requested` | action | | atlas w、local_mapper w | `ResetIfRequested` |
+| `reset_if_requested` | action | | local_mapper w | `ResetIfRequested` |
 
 兩個 stateful action 以 class 註冊：`LocalBundleAdjustment`（樹上的名稱 `local_bundle_adjustment`）與 `InitializeImu`（`initialize_imu`、`viba1`、`viba2`）。
 
@@ -327,7 +337,7 @@ ba_solver (algorithm class)
 
 | 程式 | 從 | 到 | 新的使用者 |
 |---|---|---|---|
-| `imuInitialized`、`inertialBA2`（`tracking_ops`） | `orb_tracking/shared/` | `types/map/atlas_ops` | 好幾個 LM 葉節點 |
+| `keyFramesInMap`、`imuInitialized`、`inertialBA2`（`tracking_ops`） | `orb_tracking/shared/` | `map::Atlas` 的方法（`types/map/atlas.hpp`，已搬） | `enough_keyframes_for_ba`、`initialize_imu`、`keyframe_culling`（原版的 `mpAtlas->…`：目前的地圖） |
 | inertial 的邊（預積分殘差與 Jacobian） | `orb_tracking/track_local_map/pose_inertial_optimizer` | `types/imu/` | `ba_solver` |
 
 inertial 的邊**目前沒有搬**：`ba_solver/inertial_residuals` 是 nls 的殘差（`ba_solver` 自己用），tracking 的 `pose_inertial_optimizer` 是自己寫的 Gauss-Newton，把同樣的公式寫在它的 `Problem` 裡。等 tracking 也改用 nls 時，再把共用的部分搬到 `types/imu/`。
@@ -341,7 +351,7 @@ types/
   ba/problem.hpp                 ba/Problem、ba/Result：複製出來的狀態、觀測、結果         ~200   （空殼已建）
   local_mapping/local_mapper.hpp local_mapping/LocalMapper（資源）                       ~150   （空殼已建）
   tracking/mapper_status.hpp     + tracking_ok_seq                                     +2     （已加）
-  map/atlas_ops                  + ApplyScaledRotation、KeyFramesInMap、imuInitialized 等  ~80    （ApplyScaledRotation 已加）
+  map/atlas_ops                  + ApplyScaledRotation                                  ~80    （已加；KeyFramesInMap 等改為 Atlas 的方法）
 algorithms/
   orb_local_mapping/shared/
     process_keyframe.hpp/.cpp    ProcessNewKeyFrame：process_new_keyframe、initialize_imu  ~80
@@ -380,7 +390,9 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 | `CreateNewMapPoints` 的三角化 | **已產生**（`new_map_points/`）：六個 keyframe 的小地圖 → covisibility 的順序、每個鄰居的 `SearchForTriangulation`、新點（keyframe、索引、位置） |
 | `Fuse` | **已產生**（`fuse/`）：十四個 keyframe、含重複點的小地圖 → 融合的目標、每個 keyframe 的點、每個點的 bad／replaced／計數／描述子、covisibility |
 
-`MapPointCulling`、`KeyFrameCulling`、`ProcessNewKeyFrame` 是簿記，以 `types_atlas_test` 那種合成 keyframe 做單元測試，不需要原版的答案。整條軌跡直接以 bag 的 ground truth 算 ATE。
+`MapPointCulling`、`KeyFrameCulling`、`ProcessNewKeyFrame` 是簿記，以 `types_atlas_test` 那種合成 keyframe 做單元測試，不需要原版的答案。整條軌跡直接以 bag 的 ground truth 算 ATE（結果見前面的「整條軌跡的 ATE」）。
+
+`LocalInertialBA` 的 "FAIL LOCAL-INERTIAL BA"（`2·err < err_end` 或 NaN，且不是 `bLarge`）沒有 fixture 會碰到：LM 只接受讓成本下降的步，所以實際上只有 NaN 會觸發。`orb_local_mapping_local_inertial_ba_test` 把每個案例的一個觀測改成 NaN：非 `bLarge` 時判為失敗、結果不含任何要寫回的內容，`bLarge` 時照樣通過。
 
 ## 待決定
 

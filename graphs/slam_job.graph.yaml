@@ -7,6 +7,7 @@ mode: job
 use_sim_time: true
 boxes:
   main:
+    tap_record: true   # the trajectory and the ground truth for tools/ate.py (out/runs/<session>/main-*.mcap)
     resources:
       gpu:          { type: gpu/Device }
       atlas:        { type: map/Atlas, policy: versioned }   # written by local mapping; tracking reads it without waiting
@@ -48,3 +49,7 @@ edges:
   - tracker -> tracking.tracker
   - local_mapper -> local_mapping.local_mapper
   - vocabulary -> [tracking.vocabulary, local_mapping.vocabulary]
+taps:
+  - { output: tracking.pose, record: true }
+  - { output: tracking.map_to_odom, record: true }
+  - { output: euroc_mcap_driver.groundtruth, record: true }

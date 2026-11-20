@@ -48,11 +48,69 @@
 - **`orb_matcher` 多一個輸出 `stereo`**（`orb/StereoFrame`）：兩眼的 keypoint、描述子、`scale_factors` 與配對結果（`orb::Match` 的內容），**不含金字塔**。`Frame` 需要左右兩眼的特徵（KB8 stereo 的 `N = Nleft + Nright`），由 matcher 一次送出，tracking 就不必 sync 三路資料，也不會因為排隊而持有 extractor 的 GPU 金字塔 buffer。原本的 `match` 輸出保留。
 - **`imu_preintegration`**（新的 algorithm，class 形式）。詳見[IMU 預積分](#imu-預積分)。
 - **輸出**：
-  - `pose`：每個追蹤成功的影格送出 body 在 world 中的位姿（由 `Tcw` 與 `calib.T_body_left` 換算），與 `groundtruth` 同一種，可以直接比較。
+  - `pose`：每個追蹤成功的影格送出 body 在 **`odom`** 中的位姿。`odom` 是連續的座標系，不隨地圖的重新定錨而跳動，見[輸出的座標系](#輸出的座標系odom-與-map)。
+  - `map_to_odom`（`fw/TransformStamped`，`map` → `odom`）：與 `pose` 同時送出；body 在地圖（atlas 目前的世界座標系）中的位姿 = `map_to_odom · pose`。
   - `tracking`：每個影格一筆，含狀態、inlier 數、地圖與 keyframe 數。
   - `atlas_edits`：tracking 對地圖的修改（新 keyframe 取代 `InsertKeyFrame`、新地圖、相機、重設、點的 visible／found 計數），交給 local mapping 寫入 `atlas`。
   - `mapper_cmd`：要求 local mapping 中斷 BA。
   - behavior block 另有內建的 `status`。
+
+## 輸出的座標系（odom 與 map）
+
+**與原版不同之處。** 原版的世界座標系會被整個換掉：雙目初始化時是第一個相機的座標系（`Rwb0 = Tcb`），IMU 初始化與 VIBA 1、2 以 `ApplyScaledRotation(Twg)` 把整張地圖轉到重力對齊的座標系，local BA 每次都移動 keyframe 與點，之後的 merge 與 loop closing 也會移動地圖。原版每個影格回傳的 `Tcw` 就在當下的座標系裡，所以即時輸出會跳（V1_02：IMU 初始化時一個影格跳 1.26 m，ground truth 只移動 3.6 cm；之後還有 17 步超過 2 cm，最大 6 cm，來自 BA 的修正）。原版只在結束時以 `SaveTrajectoryEuRoC` 把軌跡換算到最終的座標系。即時位姿給下游（控制、導航）用時不能跳，所以這裡照 ROS REP-105 分成兩個座標系：
+
+- **`map`**：atlas 目前的世界座標系，就是原版的座標系，會被重新定錨。地圖、最佳化、`relative_poses` 軌跡清單都照原版，完全不受影響。
+- **`odom`**：連續的座標系，起點是第一個送出的影格當下的 `map`（雙目初始化時：第一個相機的座標系，z 軸不對齊重力）。之後只累積影格之間的移動，地圖怎麼被搬都不會跳。需要重力對齊或全域一致的位置時，用 `map_to_odom` 換回 `map`：body 在 `map` 中 = `map_to_odom · pose`。
+
+**作法：在新的地圖上重新定位上一個影格**（[`publish_frame/odom`](../publish_frame/odom.hpp)，每個送出 `pose` 的影格）。不需要 local mapping 送任何新訊息：地圖的每一種移動都反映在點的位置上。
+
+```
+tracker.odom 存：T_map_odom（初值 I）、上一個送出的影格（位姿、特徵、點、outlier）、它的 inlier 點在送出當時的位置、
+                它的 reference keyframe（錨點）與錨點當時的 Twc、所在的地圖
+
+每個送出 pose 的影格 f（Twc：f 在目前的 map 中）：
+  1. 地圖換了（LOST 後的新地圖、重設）：T_map_odom = Twc · (上一個影格在 odom 中)⁻¹      odom 從上一個位姿接下去
+  2. 否則，上一個影格的 inlier 點有沒有移動：
+       沒有：D = I
+       有：  T_then = PoseOptimization(上一個影格, 點在當時的位置)，從它原本的位姿開始
+             T_now  = PoseOptimization(上一個影格, 點現在的位置)，從「隨錨點移動」的位姿開始：D0 · Twc_last
+             兩者 inlier 都 ≥ 30：D = T_now · T_then⁻¹                                    （Twc，map_now ← map_then）
+             否則：D = D0 = 錨點的 Twc(現在) · Twc(當時)⁻¹；沒有錨點：D = I
+       T_map_odom = D · T_map_odom
+  3. pose = T_map_odom⁻¹ · Twc · T_body_left⁻¹，map_to_odom = T_map_odom
+  4. 記下 f、它的 inlier 點現在的位置、錨點
+```
+
+**數學依據。**
+
+1. *位姿是對地圖點的最大概似估計。* tracking 的位姿是 motion-only BA：給定地圖點 X_j，`T = argmin Σ ρ(‖u_j − π(T⁻¹ X_j)‖²_Σ)`（ORB-SLAM 的 PoseOptimization：Mur-Artal et al., "ORB-SLAM: a Versatile and Accurate Monocular SLAM System", IEEE T-RO 2015；ORB-SLAM3：Campos et al., IEEE T-RO 2021）。
+2. *規範自由度與等變性。* 重投影誤差只取決於相機與點的相對位置，所以整張地圖做剛體變換 G（X_j → G X_j）時，最佳解正好變成 G·T（BA 的 gauge freedom：Triggs et al., "Bundle Adjustment — A Modern Synthesis", 2000，第 9 節；VIO 裡的 4 自由度：Zhang, Gallego, Scaramuzza, "On the Comparison of Gauge Freedom Handling in Optimization-Based Visual-Inertial State Estimation", IEEE RA-L 2018）。因此 `D = T_now · T_then⁻¹` 對剛體的地圖變化是精確的：IMU 初始化與 VIBA 對每個 keyframe 與點做同一個剛體變換（原版的 `Twg = (Rwg^T, 0)`；stereo 的尺度固定為 1），D 就是它。
+3. *非剛體的變化。* BA 讓各處移動的量不同。D 是「同一組觀測、同一個估計器」看到的地圖變化的最佳剛體解釋，而目前的影格正是對這些點（大部分相同）定位的。所以上一個影格與目前影格之間的移動 `Twc_last(now)⁻¹ · Twc(now)` 兩端都在同一個地圖版本裡，就是 tracking 自己估出的移動；地圖的修正全部進 `map_to_odom`。剩下的誤差只來自兩個影格看到的點不完全相同。
+4. *差分消掉估計器的偏差。* 「當時」也重新解一次，而不是直接用 tracking 原本的估計（它可能來自 pose-inertial 最佳化、另一組點）；兩次都是同一個估計器，各自的偏差相減後消掉。
+5. *map / odom 的分工* 照 ROS REP-105（Coordinate Frames for Mobile Platforms）：odom 連續、可漂移；map 全域一致、可跳；兩者之間的變換承擔修正。VINS-Mono（Qin, Li, Shen, IEEE T-RO 2018）的 relocalization 也是這樣：VIO 的輸出保持連續，另外估出漂移量發布修正後的位姿。
+
+**細節。**
+- 「現在」的那次從隨錨點移動的位姿開始：整張地圖的旋轉（IMU 初始化，可達 100° 以上）遠超過 LM 從舊位姿能收斂的範圍；錨點的移動對剛體變化是精確的，所以起點就在解的附近。
+- 只在上一個影格的點真的移動時才解（約每個 keyframe 一次，local BA 之後），每次兩個 PoseOptimization。
+- inlier 太少（LOST 剛恢復、RECENTLY_LOST 時以 IMU 預測的位姿）時退回錨點的移動；錨點也不在時 D = I。
+- LOST 期間不送 pose；同一張地圖上重新定位之後，odom 的跳動就是重新定位修正的量（LOST 期間本來就不知道位姿）。
+- keyframe 的 id 在整個 atlas 重設後會重新開始，所以先比較地圖（第 1 步）。map 的 id 不會重用。
+- 單元測試 `orb_tracking_odom_test`（pose_optimization fixture 的影格，同一個影格在變化後的地圖上重新追蹤，odom 應該不動）：100° 的剛體變化 1 µm；幾公分的非剛體變化 0.7 mm（只用錨點時 137 mm）；點太少時退回錨點；換地圖時接續。
+
+`tools/ate.py` 預設用連續的 `pose`（`odom`）算 ATE，`--frame map` 換回原版的即時輸出比較；兩者都印出逐影格的步長誤差（與 ground truth 的移動比，就是跳動）。
+
+**實跑**（V1_02_medium 整段，同一次執行的兩種輸出；map 的數字與加入 odom 之前完全相同，地圖與追蹤沒有變）：
+
+| | 步長誤差 p99 | 最大 | > 10 mm | > 20 mm | ATE（SE3）|
+|---|---|---|---|---|---|
+| map，整段 | 43.1 mm | 1,246 mm（5.90 s，IMU 初始化） | 94 | 55 | 0.138 m |
+| odom，整段 | 8.8 mm | 84.7 mm（4.10 s） | 15 | 7 | 0.092 m |
+| map，10 s 起 | 20.4 mm | 45.2 mm | 46 | 16 | 0.045 m |
+| odom，10 s 起 | 7.4 mm | 13.3 mm | 5 | 0 | 0.051 m |
+
+- `map_to_odom` 變了 351 次（約每個 keyframe 一次）。
+- odom 剩下超過 10 mm 的步：11 個在開始追蹤後的第一秒（3.65–4.6 s，地圖剛建立、只有幾個 keyframe；map 的輸出在同一段也一樣大，是追蹤本身的抖動，原因未查），之後 4 個 11–13 mm（28.5、41.3、42.95、77.85 s；map 的輸出在同一時刻也有 11–28 mm）。
+- odom 的 ATE 比 map 略大（20 s 起 0.045 對 0.027 m）：這是設計上的取捨。map 的修正（VIBA 對重力方向的修正、BA）會回頭改正整張地圖，odom 不會回頭改，修正都進 `map_to_odom`，所以 odom 會漂移，要全域一致時用 map。
 
 ## IMU 預積分
 
@@ -212,7 +270,7 @@ estimate_pose        （SUCCESS = 初始位姿估計的 bOK）                  
 | `discard_outliers` | action | | tracker w | 丟掉 outlier 的 map point |
 | `handle_lost` | action | `state` inout、`atlas_edits` out | tracker w | `Track()` 結尾的 `if (mState == LOST)` |
 | `finish_frame` | action | | tracker w | `mpReferenceKF`、`mLastFrame = Frame(mCurrentFrame)` |
-| `publish_frame` | action | `state`、`pose` Optional out、`tracking` out | tracker w | 軌跡清單；`pose` 為 body 在 world 中的位姿 |
+| `publish_frame` | action | `state`、`pose` Optional out、`map_to_odom` Optional out、`tracking` out | tracker w | 軌跡清單；`pose` 為 body 在 `odom` 中的位姿，`map_to_odom` 見[輸出的座標系](#輸出的座標系odom-與-map) |
 
 `need_new_keyframe` 會送出 `mapper_cmd`（中斷 BA），condition 不能有輸出，所以它是 action；回傳 SUCCESS 表示要插入 keyframe。
 

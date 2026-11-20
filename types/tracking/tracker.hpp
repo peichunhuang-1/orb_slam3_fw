@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+#include <Eigen/Geometry>
+
 #include "fw/fw.hpp"
 #include "types/calib/stereo_imu_rig.hpp"
 #include "types/geometry/se3.hpp"
@@ -27,6 +29,23 @@ struct RelocScratch {
     long query = 0;
     int words = 0;
     float score = 0;
+};
+
+// The continuous output frame (not in ORB-SLAM3; algorithms/orb_tracking/docs/DESIGN.md, "輸出的座標系"): map is
+// the atlas's world, which is re-anchored (IMU initialization, BAs, ...); odom only follows the frames' motion.
+// Updated by publish_frame for each frame it sends a pose of.
+struct OdomState {
+    bool started = false;
+    Eigen::Isometry3d T_map_odom = Eigen::Isometry3d::Identity();
+    map::MapId map = map::kNone;  // the map the last published frame was in
+    // The last published frame (its pose in that map, features, points, outlier flags) and, per feature, its
+    // inlier point's position when published (NaN: no inlier point)
+    Frame last;
+    std::vector<Eigen::Vector3f> last_world;
+    // The last published frame's reference keyframe and its Twc then (the fallback, and the start of the
+    // re-localization)
+    map::KeyFrameId anchor = map::kNone;
+    geometry::SE3f anchor_Twc;
 };
 
 // A map point's projection in the current frame (MapPoint::mbTrackInView(R), mTrackProjX(R), mTrackProjY(R),
@@ -114,6 +133,8 @@ struct Tracker {
     std::vector<RelocScratch> reloc;  // by keyframe id
 
     bool new_keyframe = false;  // a keyframe was made this frame (the status)
+
+    OdomState odom;  // kept across resets and new maps: odom stays continuous
 };
 
 }  // namespace tracking

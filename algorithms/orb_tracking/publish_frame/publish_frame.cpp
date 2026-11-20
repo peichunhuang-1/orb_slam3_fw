@@ -1,8 +1,10 @@
 // publish_frame: the end of Tracking::Track(). OK / RECENTLY_LOST: the frame's pose relative to its reference
 // keyframe goes to the trajectory (mlRelativeFramePoses, ...; without a pose the last entry again), and the body
-// pose is sent. The status is sent for every frame.
+// pose is sent in the continuous odom frame with map_to_odom (odom.hpp; not in ORB-SLAM3). The status is sent
+// for every frame.
 #include <Eigen/Geometry>
 
+#include "algorithms/orb_tracking/publish_frame/odom.hpp"
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 #include "fw/ros/msgs/geometry.hpp"
 #include "types/tracking/status.hpp"
@@ -12,7 +14,8 @@ namespace {
 using tracking::State;
 
 fw::bt::Status publish_frame(const State& state, fw::Write<tracking::Tracker> tracker,
-                             fw::Optional<fw::PoseStamped>& pose, tracking::Status& status) {
+                             fw::Optional<fw::PoseStamped>& pose, fw::Optional<fw::TransformStamped>& map_to_odom,
+                             tracking::Status& status) {
     tracking::Tracker& t = *tracker;
     const map::Atlas& a = tracker->view;
     const tracking::Frame& f = t.current;
@@ -32,15 +35,12 @@ fw::bt::Status publish_frame(const State& state, fw::Write<tracking::Tracker> tr
             t.lost.push_back(state == State::LOST);
         }
         if (f.hasPose()) {
-            // The body in the world: Twc · T_body_left⁻¹
-            const geometry::SE3f Twc = f.pose().inverse();
-            Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-            T.linear() = Twc.rotationMatrix().cast<double>();
-            T.translation() = Twc.translation().cast<double>();
-            T = T * t.calib.T_body_left.inverse();
+            const orb_tracking::OdomUpdate u = orb_tracking::updateOdom(t.odom, f, a);
+            // The body in odom: T_odom_cam · T_body_left⁻¹
+            const Eigen::Isometry3d T = u.T_odom_cam * t.calib.T_body_left.inverse();
             const Eigen::Quaterniond q(T.rotation());
             fw::PoseStamped p;
-            p.frame_id = "world";
+            p.frame_id = "odom";
             p.pose.position.x = T.translation().x();
             p.pose.position.y = T.translation().y();
             p.pose.position.z = T.translation().z();
@@ -49,6 +49,18 @@ fw::bt::Status publish_frame(const State& state, fw::Write<tracking::Tracker> tr
             p.pose.orientation.z = q.z();
             p.pose.orientation.w = q.w();
             pose = p;
+            const Eigen::Quaterniond qm(u.T_map_odom.rotation());
+            fw::TransformStamped m;
+            m.frame_id = "map";
+            m.child_frame_id = "odom";
+            m.transform.translation.x = u.T_map_odom.translation().x();
+            m.transform.translation.y = u.T_map_odom.translation().y();
+            m.transform.translation.z = u.T_map_odom.translation().z();
+            m.transform.rotation.x = qm.x();
+            m.transform.rotation.y = qm.y();
+            m.transform.rotation.z = qm.z();
+            m.transform.rotation.w = qm.w();
+            map_to_odom = m;
         }
     }
 
@@ -71,4 +83,4 @@ fw::bt::Status publish_frame(const State& state, fw::Write<tracking::Tracker> tr
 
 FW_REGISTER_BT_ACTION(publish_frame, INPUTS(("state", tracking::State, latest)),
                       RESOURCES(("tracker", tracking::Tracker, write)),
-                      OUTPUTS(("pose", fw::PoseStamped), ("tracking", tracking::Status)));
+                      OUTPUTS(("pose", fw::PoseStamped), ("map_to_odom", fw::TransformStamped), ("tracking", tracking::Status)));

@@ -8,7 +8,8 @@ inputs:
   params: { type: OrbTrackingParams }               # latest
   mapper: { type: tracking/MapperStatus }           # latest; local_mapping (not there yet: absent)
 outputs:
-  pose:        { type: fw/PoseStamped }             # body in world, per tracked frame
+  pose:        { type: fw/PoseStamped }             # body in odom (continuous), per tracked frame
+  map_to_odom: { type: fw/TransformStamped }        # map (the atlas's world, re-anchored) -> odom, with each pose
   tracking:    { type: tracking/Status }            # per frame: state, inliers, map / keyframe counts
   atlas_edits: { type: tracking/AtlasEdits }        # tracking's atlas changes -> local_mapping (InsertKeyFrame, resets)
   mapper_cmd:  { type: tracking/MapperCommand }     # interrupt BA
@@ -36,4 +37,5 @@ root:
             - handle_discontinuity: { state: "{state}", mapper: "{mapper}", atlas_edits: "{atlas_edits}" }
             - SubTree: { tree: trees/tracking/track_frame.tree.yaml, name: track_frame, inertial: "{inertial}",
                          params: "{params}", mapper: "{mapper}", state: "{state}", pose: "{pose}",
-                         tracking: "{tracking}", atlas_edits: "{atlas_edits}", mapper_cmd: "{mapper_cmd}" }
+                         map_to_odom: "{map_to_odom}", tracking: "{tracking}", atlas_edits: "{atlas_edits}",
+                         mapper_cmd: "{mapper_cmd}" }

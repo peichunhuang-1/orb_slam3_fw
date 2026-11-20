@@ -141,11 +141,14 @@ set(ORB_TRACKING_TEST_TYPES types/tracking/frame.cpp types/map/vocabulary.cpp ty
 #   search_by_bow   shared/search_by_bow and rotation_histogram on hand-made keyframe / frame pairs
 #   pose_inertial   track_local_map/pose_inertial_optimizer vs tests/fixtures/orb_slam3/pose_inertial
 #   mlpnp           relocalize/mlpnp_solver vs tests/fixtures/orb_slam3/mlpnp
+#   odom            publish_frame/odom: the continuous odom frame through rigid and non-rigid map changes
 set(orb_tracking_pose_optimizer_test_SOURCES algorithms/orb_tracking/shared/pose_optimizer.cpp)
 set(orb_tracking_search_by_bow_test_SOURCES algorithms/orb_tracking/shared/search_by_bow.cpp)
 set(orb_tracking_pose_inertial_test_SOURCES algorithms/orb_tracking/track_local_map/pose_inertial_optimizer.cpp)
 set(orb_tracking_mlpnp_test_SOURCES algorithms/orb_tracking/relocalize/mlpnp_solver.cpp)
-foreach(t pose_optimizer search_by_bow pose_inertial mlpnp)
+set(orb_tracking_odom_test_SOURCES algorithms/orb_tracking/publish_frame/odom.cpp
+    algorithms/orb_tracking/shared/pose_optimizer.cpp)
+foreach(t pose_optimizer search_by_bow pose_inertial mlpnp odom)
   add_executable(orb_tracking_${t}_test tests/orb_tracking/${t}_test.cpp ${orb_tracking_${t}_test_SOURCES}
                  ${ORB_TRACKING_TEST_TYPES})
   target_include_directories(orb_tracking_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
