@@ -14,7 +14,8 @@
 | `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
 | `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
 | `search_in_neighbors`（`SearchInNeighbors`、`ORBmatcher::Fuse`） | 已實作（`search_in_neighbors/fuse`），與原版的 fixture 一致：`orb_local_mapping_fuse_test`（`tests/fixtures/orb_slam3/fuse`） |
-| `keyframe_culling`、`initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
+| `keyframe_culling`（`KeyFrameCulling`） | 已實作（`keyframe_culling/culling`），單元測試 `orb_local_mapping_keyframe_culling_test` |
+| `initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
 | tracking 端的 `tracking_ok_seq` | 型別已加，`apply_mapper_update` 尚未改 |
 
 **骨架的實跑**（`fw launch graphs/slam_job.graph.yaml`，V1_02_medium，stereo-inertial）：tracking 從頭到尾都是 OK，處理了 300 多個 keyframe（以前臨時加入 `ProcessNewKeyFrame` 時是 324 個），每影格 240–500 個 inlier。從第 3 個 keyframe 起，每個 keyframe 都完成一次 `ba_problem → ba_solver → ba_result` 的 wake 來回。tracking 在 local mapping 忙時不送 keyframe，所以佇列自然不會超過 1 個。另外以暫時的追蹤輸出測過佇列有 3 個的情形（每 10 個 keyframe 重複放入 3 次，`ba_solver` 多睡 300 ms）：每個 keyframe 各用一個 tick，tick 之間沒有新資料時由 fw 自己補上，三個都處理完才進 `mapper_idle`（見「樹的邏輯」）。
@@ -24,6 +25,10 @@
 **加入 `search_in_neighbors` 之後的實跑**（同上）：每個 keyframe 的 Fuse 合併掉地圖上 1–5% 的點（例如 keyframe 220 時 4,877 → 4,726），地圖在 keyframe 300 時約 5,200 個點（之前約 8,000 個，差的大多是重複的點）。整段沒有 reset 或新地圖的訊息。
 
 原版 `SearchInNeighbors` 要「融合到右相機」的兩次呼叫寫成 `Fuse(pKF, points, true)`，但簽名是 `Fuse(pKF, points, th = 3.0, bRight = false)`：`true` 變成 `th = 1`，實際上是再做一次左相機、半徑 1 的 Fuse，右相機從來沒有被融合。這是由 fixture 找到的（加上右相機的版本時，多替換約 10% 的點），port 照原樣重現，寫在 `fuse.hpp` 開頭。
+
+**加入 `keyframe_culling` 之後的實跑**（同上）：324 個 keyframe 裡刪掉 4 個。stereo-inertial 的門檻是 50%，大多數 local keyframe 都超過（近點裡 80–95% 是冗餘的），但 IMU 還沒初始化（`initialize_imu` 是空殼），所以只剩「前後 keyframe 相隔 < 0.5 s」與「IMU 位置離前一個 < 2 cm、相隔 < 3 s」兩條路，與原版在 IMU 初始化之前相同。
+
+原版 `KeyFrameCulling` 對右相機的特徵也讀 `mvDepth[i]`，但 `mvDepth` 只有 `Nleft` 個，是越界讀取；port 把右相機的特徵當作沒有深度（視同遠點，不計入），寫在 `culling.hpp` 開頭。inertial 時原版先把 keyframe 從 prev/next 鏈拿掉、把它的 preintegration 併入下一個，再呼叫 `SetBadFlag`；`not_erase` 的 keyframe 會因此留在地圖上但離開鏈，port 照樣重現。
 
 `SearchForTriangulation` 的 matcher 是 `ORBmatcher(0.6, false)`，不做方向檢查，所以原本計畫的 `rotation_histogram.hpp` 搬到 `types/orb/` 不需要做。
 

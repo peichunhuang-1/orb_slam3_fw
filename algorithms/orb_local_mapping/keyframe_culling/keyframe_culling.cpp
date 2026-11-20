@@ -1,15 +1,13 @@
-// keyframe_culling: LocalMapping::KeyFrameCulling. A local keyframe is bad when 90% of its points are seen by at
-// least 3 other keyframes at the same or a finer scale (inertial: also bounded by the time to its neighbours);
-// stops after 20 when the BA was interrupted, or after 100.
+// keyframe_culling: LocalMapping::KeyFrameCulling (culling.hpp). A local keyframe is bad when 90% of its points
+// are seen by at least 3 other keyframes at the same or a finer scale (inertial: 50%, and bounded by the time to
+// its neighbours); stops after 20 when the BA was interrupted, or after 100.
+#include "algorithms/orb_local_mapping/keyframe_culling/culling.hpp"
 #include "fw/fw.hpp"
-#include "types/local_mapping/local_mapper.hpp"
-#include "types/map/atlas.hpp"
 
 namespace {
 
 fw::bt::Status keyframe_culling(fw::Write<map::Atlas> atlas, fw::Read<local_mapping::LocalMapper> mapper) {
-    (void)atlas;
-    (void)mapper;  // TODO KeyFrameCulling
+    orb_local_mapping::keyFrameCulling(*atlas, *mapper);
     return fw::bt::Status::SUCCESS;
 }
 
