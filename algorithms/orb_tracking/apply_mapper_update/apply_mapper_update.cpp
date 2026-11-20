@@ -6,6 +6,8 @@
 // The new frame is not preintegrated yet: begin_frame gives it the new keyframe's bias. So of the original's
 // mCurrentFrame update only the last frame's is done here (the original's mCurrentFrame between two frames is the
 // last frame).
+//
+// Also InitializeIMU's last mpTracker->mState = Tracking::OK: applied once per tracking_ok_seq, after the update.
 #include <memory>
 
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
@@ -15,15 +17,27 @@ namespace {
 
 constexpr float kGravity = 9.81f;  // IMU::GRAVITY_VALUE
 
-fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> mapper, fw::Write<tracking::Tracker> tracker) {
+void updateFrameImu(const tracking::MapperStatus& mapper, tracking::Tracker& t);
+
+fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> mapper, fw::InOut<tracking::State>& state,
+                                   fw::Write<tracking::Tracker> tracker) {
+    if (!mapper.has_value()) return fw::bt::Status::SUCCESS;
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = tracker->view;
-    if (!mapper.has_value() || mapper->imu_update_seq == 0 || mapper->imu_update_seq == t.applied_imu_update)
-        return fw::bt::Status::SUCCESS;
+    if (mapper->imu_update_seq != 0 && mapper->imu_update_seq != t.applied_imu_update) updateFrameImu(*mapper, t);
+    if (mapper->tracking_ok_seq != 0 && mapper->tracking_ok_seq != t.applied_tracking_ok) {
+        t.applied_tracking_ok = mapper->tracking_ok_seq;
+        state.emplace(tracking::State::OK);
+    }
+    return fw::bt::Status::SUCCESS;
+}
+
+void updateFrameImu(const tracking::MapperStatus& mapper_status, tracking::Tracker& t) {
+    const tracking::MapperStatus* mapper = &mapper_status;
+    const map::Atlas& a = t.view;
     t.applied_imu_update = mapper->imu_update_seq;
     const float s = mapper->imu_scale;
     const map::KeyFrame* kf = a.keyframe(mapper->imu_keyframe);
-    if (!kf) return fw::bt::Status::SUCCESS;
+    if (!kf) return;
 
     // The trajectory of the keyframe's map is scaled (through bad references to their parents)
     for (std::size_t k = 0; k < t.relative_poses.size(); ++k) {
@@ -47,7 +61,7 @@ fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> m
 
     // The last frame's state from its keyframe and preintegration
     const map::KeyFrame* lkf = a.keyframe(t.last.last_keyframe);
-    if (!t.last.valid() || !lkf) return fw::bt::Status::SUCCESS;
+    if (!t.last.valid() || !lkf) return;
     if (t.last.id == lkf->data->frame_id) {
         t.last.setImuPoseVelocity(lkf->imuRotation(), lkf->imuPosition(), lkf->velocity());
     } else if (t.last.preintegrated) {
@@ -62,10 +76,10 @@ fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> m
                                   Vwb1 + Gz * t12 + Rwb1 * p.updatedDeltaVelocity());
     }
     t.first_imu_frame_id = t.current.id;
-    return fw::bt::Status::SUCCESS;
+    return;
 }
 
 }  // namespace
 
-FW_REGISTER_BT_ACTION(apply_mapper_update, INPUTS(("mapper", tracking::MapperStatus, latest)),
+FW_REGISTER_BT_ACTION(apply_mapper_update, INPUTS(("mapper", tracking::MapperStatus, latest), ("state", tracking::State, inout)),
                       RESOURCES(("tracker", tracking::Tracker, write)));

@@ -9,14 +9,14 @@
 | 樹檔、圖檔、全部葉節點的埠與資源 | 完成，`fw check graphs/slam_job.graph.yaml` 通過（含環的規則） |
 | 簿記：`read_params`、`apply_tracking_edits`、`handle_mapper_command`、`publish_mapper_status`、`has_new_keyframe`、`queue_empty`、`ready_for_local_ba`、`enough_keyframes_for_ba`、`is_inertial_uninitialized`、`mapper_idle`、`reset_if_requested`、`send_to_loop_closing` | 已實作 |
 | `process_new_keyframe`（`ProcessNewKeyFrame`） | 已實作（`shared/process_keyframe`） |
-| `local_bundle_adjustment` | `LocalBundleAdjustment` 已實作（`local_bundle_adjustment/local_ba`：視窗、問題的複製、依 id 寫回）。`LocalInertialBA` 尚未做：IMU 初始化之後才會走到，目前直接 SUCCESS |
-| `ba_solver` | `local` 已實作（`ba_solver/local_ba`，解法器是 [`libs/nls/`](../../../libs/nls/problem.hpp)），與原版的 fixture 一致：`orb_local_mapping_local_ba_test`（`tests/fixtures/orb_slam3/local_ba`）。三種 inertial 的問題仍原樣送回 |
+| `local_bundle_adjustment` | `LocalBundleAdjustment` 已實作（`local_bundle_adjustment/local_ba`：視窗、問題的複製、依 id 寫回）。IMU 初始化之後的 `mTinit` 累加、移動不足時的重設與 `mbBadImu` 已實作；`LocalInertialBA` 尚未做，暫時以 `LocalBundleAdjustment` 代替 |
+| `ba_solver` | `local`（`ba_solver/local_ba`）、`inertial_init` 與 `full_inertial`（`ba_solver/inertial`，邊在 `inertial_residuals`）已實作，解法器是 [`libs/nls/`](../../../libs/nls/problem.hpp)；與原版的 fixture 比對：`orb_local_mapping_local_ba_test`、`orb_local_mapping_imu_init_test`。`local_inertial` 仍原樣送回 |
 | `map_point_culling`（`MapPointCulling`） | 已實作（`map_point_culling/culling`），單元測試 `orb_local_mapping_map_point_culling_test` |
 | `create_new_map_points`（`CreateNewMapPoints`、`SearchForTriangulation`、KB8 的 `TriangulateMatches`） | 已實作（`create_new_map_points/triangulation`），與原版的 fixture 一致：`orb_local_mapping_new_map_points_test`（`tests/fixtures/orb_slam3/new_map_points`） |
 | `search_in_neighbors`（`SearchInNeighbors`、`ORBmatcher::Fuse`） | 已實作（`search_in_neighbors/fuse`），與原版的 fixture 一致：`orb_local_mapping_fuse_test`（`tests/fixtures/orb_slam3/fuse`） |
 | `keyframe_culling`（`KeyFrameCulling`） | 已實作（`keyframe_culling/culling`），單元測試 `orb_local_mapping_keyframe_culling_test` |
-| `initialize_imu`、`begin_inertial_ba` | 空殼（`initialize_imu` 直接 SUCCESS，`begin_inertial_ba` 直接 FAILURE） |
-| tracking 端的 `tracking_ok_seq` | 型別已加，`apply_mapper_update` 尚未改 |
+| `initialize_imu`（`InitializeIMU`）、`begin_inertial_ba`（VIBA 1、2 的條件） | 已實作（`initialize_imu/imu_init`），與原版的 fixture 比對：`orb_local_mapping_imu_init_test`（`tests/fixtures/orb_slam3/imu_init`） |
+| tracking 端的 `tracking_ok_seq` | 已實作：`apply_mapper_update` 多了 `state` inout 埠 |
 
 **骨架的實跑**（`fw launch graphs/slam_job.graph.yaml`，V1_02_medium，stereo-inertial）：tracking 從頭到尾都是 OK，處理了 300 多個 keyframe（以前臨時加入 `ProcessNewKeyFrame` 時是 324 個），每影格 240–500 個 inlier。從第 3 個 keyframe 起，每個 keyframe 都完成一次 `ba_problem → ba_solver → ba_result` 的 wake 來回。tracking 在 local mapping 忙時不送 keyframe，所以佇列自然不會超過 1 個。另外以暫時的追蹤輸出測過佇列有 3 個的情形（每 10 個 keyframe 重複放入 3 次，`ba_solver` 多睡 300 ms）：每個 keyframe 各用一個 tick，tick 之間沒有新資料時由 fw 自己補上，三個都處理完才進 `mapper_idle`（見「樹的邏輯」）。
 
@@ -29,6 +29,12 @@
 **加入 `keyframe_culling` 之後的實跑**（同上）：324 個 keyframe 裡刪掉 4 個。stereo-inertial 的門檻是 50%，大多數 local keyframe 都超過（近點裡 80–95% 是冗餘的），但 IMU 還沒初始化（`initialize_imu` 是空殼），所以只剩「前後 keyframe 相隔 < 0.5 s」與「IMU 位置離前一個 < 2 cm、相隔 < 3 s」兩條路，與原版在 IMU 初始化之前相同。
 
 **加入 local BA 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：整段沒有 reset 或新地圖的訊息。每次 BA 跑 5–10 次迭代，刪掉 40–160 個 outlier 觀測。視窗隨地圖變大：keyframe 20 時 21 個 keyframe、577 個點，keyframe 140 時 68 個、1,786 個點，keyframe 300 時 156 個、2,490 個點。在 Pi 5 上，前 220 次平均約 107 ms，keyframe 300 附近單次 0.7–1.9 s。視窗這麼大，是因為 IMU 沒有初始化（`initialize_imu` 是空殼），`KeyFrameCulling` 幾乎刪不掉 keyframe，V1_02 又一直在同一個房間裡，covisibility 只增不減。`lossless` 播放是同步的，BA 越慢，整段跑得越久：200 s 只到 keyframe 300 左右。
+
+**加入 `initialize_imu` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：
+- 第一次 IMU 初始化在 keyframe 9（10 個 keyframe、2.35 s）。`InertialOptimization` 約 1 ms，`FullInertialBA`（389 點）12 ms。gyro bias 估為 (-0.0026, 0.017, 0.074)，VIBA 2 之後是 (-0.0026, 0.021, 0.076)，與 V1_02 已知的 gyro bias 相近。
+- VIBA 1 在 `mTinit` = 5 s、VIBA 2 在 15 s 觸發，`FullInertialBA` 分別是 596 點 66 ms、1,159 點 92 ms。整段沒有 reset 或 LOST。
+- IMU 初始化之後 `KeyFrameCulling` 生效，地圖維持在 65–78 個 keyframe（之前到 300 個以上），local BA 的視窗也跟著變小。200 s 內跑到 `mTinit` 72 s，接近整段序列（之前只到 keyframe 300 左右）。
+- `LocalInertialBA` 還沒做，IMU 初始化之後由 `LocalBundleAdjustment` 代替：keyframe 的速度與 bias 只在 VIBA 時更新。
 
 原版 `KeyFrameCulling` 對右相機的特徵也讀 `mvDepth[i]`，但 `mvDepth` 只有 `Nleft` 個，是越界讀取；port 把右相機的特徵當作沒有深度（視同遠點，不計入），寫在 `culling.hpp` 開頭。inertial 時原版先把 keyframe 從 prev/next 鏈拿掉、把它的 preintegration 併入下一個，再呼叫 `SetBadFlag`；`not_erase` 的 keyframe 會因此留在地圖上但離開鏈，port 照樣重現。
 
@@ -276,7 +282,7 @@ ba_solver (algorithm class)
 
 `ba/Result` 依 id 列出新的狀態（位姿、速度、bias、點的位置），以及要刪除的觀測（outlier 的 `(keyframe, point)`，原版在寫回時 `EraseMapPointMatch`、`EraseObservation`）；`inertial_init` 另有 `Rwg`、scale、bias。
 
-**解法器**：這些是大型稀疏問題（local BA 數十個 keyframe、數千點；full inertial BA 是整張地圖）。依[原則](../../orb_tracking/docs/DESIGN.md#原則)不引入 g2o，解法器在 [`libs/nls/`](../../../libs/nls/problem.hpp)（見[待決定](#待決定)）。inertial 的邊之後與 tracking 的 `pose_inertial_optimizer` 用同一套數學。
+**解法器**：這些是大型稀疏問題（local BA 數十個 keyframe、數千點；full inertial BA 是整張地圖）。依[原則](../../orb_tracking/docs/DESIGN.md#原則)不引入 g2o，解法器在 [`libs/nls/`](../../../libs/nls/problem.hpp)（見[待決定](#待決定)）。inertial 的邊在 `ba_solver/inertial_residuals`，與 tracking 的 `pose_inertial_optimizer` 是同一套數學，但 tracking 那邊是自己寫的 Gauss-Newton，目前各寫一份（見「程式碼的配置」）。
 
 **`local` 與原版的對應**（`ba_solver/local_ba`、`local_bundle_adjustment/local_ba`）：
 - KB8 雙目沒有 `uRight`，所以沒有原版的 stereo 邊。左眼的特徵是 `EdgeSE3ProjectXYZ`（左相機），右眼的是 `EdgeSE3ProjectXYZToBody`（`Trl` 之後的右相機）。information 是特徵所在層的 1/σ²。
@@ -285,12 +291,26 @@ ba_solver (algorithm class)
 - outlier 的判定：最後一次算的誤差（g2o 把誤差留在最後一次嘗試的那一步，即使那一步被拒絕）chi2 > 5.991，或點在該相機後方。
 - 寫回時，點的參考 keyframe 若被刪掉觀測，原版從 `std::map<KeyFrame*, …>` 取第一個（依位址），port 依 id 取最小的，所以這些點的尺度範圍可能不同（fixture 測試不比較它們）。
 
+**`inertial_init`、`full_inertial` 與原版的對應**（`ba_solver/inertial`、`initialize_imu/imu_init`）：
+- 變數：body 位姿存成 `Rwb`（矩陣）與 `twb`，更新是 `twb += Rwb·υ`、`Rwb = Rwb·Exp(ω)`（`ImuCamPose::Update`）。原版每三次更新呼叫一次 `NormalizeRotation`，但沒有用它的回傳值，所以這裡也不做。重力方向是 2 自由度的 `Rwg·Exp(a, b, 0)`，scale 是 `s·exp(δ)`；stereo 時 scale 固定。
+- 邊：`EdgeInertialGS`、`EdgeInertial`（Huber √16.92）、gyro／acc 的 random walk、bias 先驗、body 位姿上的 `EdgeMono`（Huber √5.991），誤差與 Jacobian 照 `g2o_types` 寫。
+- 原版的細節照樣重現：
+  - bias 先驗的誤差是 `prior − b`，Jacobian 卻是 +I（`EdgePriorAcc`、`EdgePriorGyro`）。所以 `FullInertialBA` 之後 acc bias 常常變成兩倍左右。改成 −I 時 fixture 測試會失敗。
+  - `FullInertialBA` 只收 `rightIndex < mvKeysRight.size()` 的右眼觀測，比較的是減去 `NLeft` 之前的索引。左眼特徵比右眼多時，右眼的觀測幾乎全部被丟掉。
+  - priorG = 0 時先驗的邊照樣加上，information 為 0。
+- 原版依位址排序，port 依 id：
+  - `GetAllKeyFrames` 依位址排序，`InertialOptimization` 的 bias 從其中第一個 keyframe 開始，`FullInertialBA`（bInit）則從最後一個開始。port 依 id 取最小的與最大的。在 InitializeIMU 裡這兩次呼叫之前所有 keyframe 的 bias 都相同（第一次初始化時是 0，之後是上一次 `FullInertialBA` 的共用 bias），所以結果一樣。
+- 兩個最佳化與原版只能大致相符：
+  - `InertialOptimization` 結束時 cost 很平：兩邊最後的 cost 相差 1e-5（相對），迭代次數卻可能不同（原版 2 次、port 4 次），acc bias 最多差 5e-4。這遠小於先驗的 3e-3。
+  - `FullInertialBA` 沒有固定的頂點，平移與 yaw 不可觀測。λ 降到 1e-10 左右之後，捨入誤差會讓整張地圖沿著這幾個方向移動（viba2 是 0.1 m）。只有一次觀測的點，深度也一樣不受約束。
+  - 所以測試讓每個寫回的步驟都從原版的結果開始，嚴格比對寫回與修正（5e-7）；最佳化本身則先對齊 keyframe 中心，再用容差比對。
+
 ## 介面的變更（tracking 端）
 
 | 變更 | 原因 |
 |---|---|
-| `tracking/MapperStatus` 多一個 `tracking_ok_seq`（已加入型別） | `InitializeIMU` 結尾的 `mpTracker->mState = Tracking::OK` |
-| `apply_mapper_update` 多一個 `state` inout 埠，遇到新的 `tracking_ok_seq` 時設 `state = OK`（之後做） | 同上；只有它在 tracking 的樹上讀 `mapper` 並能改 `state` |
+| `tracking/MapperStatus` 多一個 `tracking_ok_seq` | `InitializeIMU` 結尾的 `mpTracker->mState = Tracking::OK` |
+| `apply_mapper_update` 多一個 `state` inout 埠，遇到新的 `tracking_ok_seq` 時設 `state = OK`（已做） | 同上；只有它在 tracking 的樹上讀 `mapper` 並能改 `state` |
 
 `UpdateFrameIMU` 原版呼叫兩次（先以 `mScale`，再以 1.0）。第二次 scale 為 1，只更新 bias 與上一影格的狀態；`imu_update_seq` 送出的是兩次合併後的結果（scale、`vpKF[0]` 的 bias、目前的 keyframe），tracking 的 `apply_mapper_update` 已照這樣處理。
 
@@ -303,6 +323,10 @@ ba_solver (algorithm class)
 | `imuInitialized`、`inertialBA2`（`tracking_ops`） | `orb_tracking/shared/` | `types/map/atlas_ops` | 好幾個 LM 葉節點 |
 | inertial 的邊（預積分殘差與 Jacobian） | `orb_tracking/track_local_map/pose_inertial_optimizer` | `types/imu/` | `ba_solver` |
 
+inertial 的邊**目前沒有搬**：`ba_solver/inertial_residuals` 是 nls 的殘差（`ba_solver` 自己用），tracking 的 `pose_inertial_optimizer` 是自己寫的 Gauss-Newton，把同樣的公式寫在它的 `Problem` 裡。等 tracking 也改用 nls 時，再把共用的部分搬到 `types/imu/`。
+
+`ApplyScaledRotation` 放在 `types/map/atlas_ops`（之後 loop closing 的地圖合併也會用）。
+
 ### 配置與行數（估計）
 
 ```
@@ -310,8 +334,7 @@ types/
   ba/problem.hpp                 ba/Problem、ba/Result：複製出來的狀態、觀測、結果         ~200   （空殼已建）
   local_mapping/local_mapper.hpp local_mapping/LocalMapper（資源）                       ~150   （空殼已建）
   tracking/mapper_status.hpp     + tracking_ok_seq                                     +2     （已加）
-  map/atlas_ops                  + ApplyScaledRotation、KeyFramesInMap、imuInitialized 等  ~80
-  imu/inertial_residual.hpp      預積分殘差與 Jacobian（從 pose_inertial_optimizer 搬來）  ~250
+  map/atlas_ops                  + ApplyScaledRotation、KeyFramesInMap、imuInitialized 等  ~80    （ApplyScaledRotation 已加）
 algorithms/
   orb_local_mapping/shared/
     process_keyframe.hpp/.cpp    ProcessNewKeyFrame：process_new_keyframe、initialize_imu  ~80
@@ -320,7 +343,7 @@ algorithms/
     create_new_map_points/       + SearchForTriangulation、epipolar 檢查、三角化          ~400
     search_in_neighbors/         + Fuse（keyframe ← 點、點 → keyframe）                  ~300
     local_bundle_adjustment/     + 局部視窗與固定 keyframe 的選取、問題的建立、寫回          ~400   （local_ba：150，已做）
-    initialize_imu/              + 三個階段、spanning tree 的修正傳遞                     ~450
+    initialize_imu/              + 三個階段、spanning tree 的修正傳遞                     ~450   （imu_init：380，已做）
     keyframe_culling/                                                                 ~150
     其餘約 15 個                  每個約 20–60 行                                        ~600
   orb_local_mapping/docs/DESIGN.md
@@ -328,8 +351,8 @@ algorithms/
     ba_solver.cpp                block                                                 ~50    （已做）
     reprojection.hpp             KB8 重投影（左、右眼）                                     ~60    （已做）
     local_ba.hpp/.cpp            local：ba::Problem → nls → ba::Result                    ~100   （已做）
-    edges.hpp/.cpp               IMU、random walk、先驗                                    ~500
-    inertial_init.hpp/.cpp       InertialOptimization（Rwg、scale）                       ~300
+    inertial_residuals.hpp/.cpp  流形與邊：IMU、random walk、先驗、body 位姿的重投影        ~420   （已做）
+    inertial.hpp/.cpp            inertial_init、full_inertial                             ~230   （已做）
 libs/nls/
   problem.hpp/.cpp               LM + Schur complement、流形、Huber、稀疏 LDLT              ~870   （已做）
 graphs/slam_job.graph.yaml
@@ -345,8 +368,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 |---|---|
 | `LocalBundleAdjustment` | **已產生**（`local_ba/`）：16 與 6 個 keyframe 的小地圖（非 inertial、inertial 各一）→ 局部與固定的 keyframe、邊數、位姿、點、刪除的觀測、變 bad 的點 |
 | `LocalInertialBA` | 上述加速度、bias、預積分；`bLarge`、`bRecInit` 兩種 → 狀態、刪除的觀測 |
-| `InertialOptimization` | keyframe 的位姿與預積分、`Rwg`、scale、bias 的初值、priorG、priorA → `Rwg`、scale、bias、速度 |
-| `FullInertialBA` | 整張小地圖 → 狀態、點 |
+| `InitializeIMU`（含 `InertialOptimization`、`ApplyScaledRotation`、`FullInertialBA`） | **已產生**（`imu_init/`）：12–14 個 keyframe 的 stereo-inertial 小地圖，三個案例（第一次初始化、VIBA 1、VIBA 2）→ 重力方向與速度的初值、`InertialOptimization` 的結果、寫回與 `ApplyScaledRotation` 之後的狀態、`FullInertialBA` 的結果、期間加入的 keyframe 處理之後沿 spanning tree 修正的最終狀態 |
 | `CreateNewMapPoints` 的三角化 | **已產生**（`new_map_points/`）：六個 keyframe 的小地圖 → covisibility 的順序、每個鄰居的 `SearchForTriangulation`、新點（keyframe、索引、位置） |
 | `Fuse` | **已產生**（`fuse/`）：十四個 keyframe、含重複點的小地圖 → 融合的目標、每個 keyframe 的點、每個點的 bad／replaced／計數／描述子、covisibility |
 

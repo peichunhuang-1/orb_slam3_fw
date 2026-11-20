@@ -20,6 +20,9 @@ namespace map {
 MapId createNewMap(Atlas& a, MapId id = kNone);
 void clearMap(Atlas& a, MapId m);                 // Map::clear: its keyframes leave it (map = kNone), sets emptied
 std::vector<MapPointId> mapPoints(const Atlas& a, MapId m);  // GetAllMapPoints, by id (goes over every point)
+// Map::ApplyScaledRotation(T, s, bScaledVel): each keyframe's Twc with its translation scaled, then T·Twc; its
+// velocity rotated by T (and scaled); each point s·R·p + t, UpdateNormalAndDepth; the map's change index
+void applyScaledRotation(Atlas& a, MapId m, const geometry::SE3f& T, float s, bool scaled_velocity);
 void eraseMapFromBowIndex(Atlas& a, MapId m);     // KeyFrameDatabase::clearMap (before clearMap)
 void clearAtlas(Atlas& a);                        // clearAtlas, KeyFrameDatabase::clear and the id restart of Reset
 // AddCamera for a stereo pair: the index of an equal rig (same intrinsics, size and extrinsics) or of the new one

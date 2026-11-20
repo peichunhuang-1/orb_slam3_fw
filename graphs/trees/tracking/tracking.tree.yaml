@@ -28,7 +28,7 @@ root:
       - apply_pending_reset: { state: "{state}", atlas_edits: "{atlas_edits}" }
       - make_frame: { frame: "{frame}", calib: "{calib}", params: "{params}", inertial: "{inertial}",
                       atlas_edits: "{atlas_edits}" }
-      - apply_mapper_update: { mapper: "{mapper}" }
+      - apply_mapper_update: { mapper: "{mapper}", state: "{state}" }
       # Track()
       - IfThenElse:
           children:

@@ -42,9 +42,11 @@ struct PendingOptimization {
     Waiting waiting = Waiting::none;
     std::uint64_t seq = 0;  // the problem's; a result with another one is dropped
     map::MapId map = map::kNone;  // the problem's map (the write-back skips what left it)
-    // initialize_imu: the keyframes in temporal order (vpKF), and the first one's timestamp (mFirstTs)
+    // initialize_imu: the keyframes in temporal order (vpKF), the first one's timestamp (mFirstTs), and the
+    // current keyframe when the full inertial BA was set up (its nLoopId, GBAid)
     std::vector<map::KeyFrameId> imu_keyframes;
     double first_ts = 0;
+    map::KeyFrameId gba_id = map::kNone;
 };
 
 struct LocalMapper {

@@ -1,10 +1,11 @@
 // local_bundle_adjustment: the local BA of Run(), computed outside the lock (docs/DESIGN.md, "鎖外計算").
 //   start:   skipped (SUCCESS) when mbAbortBA is already set, as the original's return before optimize().
-//            Inertial with the IMU initialized: LocalInertialBA (TODO: mTinit accumulates; too little motion
-//            before BA2 requests the active map's reset and sets mbBadImu; bLarge: tracking's inliers > 100,
-//            bRecInit: !BA2); for now skipped (SUCCESS). Otherwise LocalBundleAdjustment's window and problem
-//            (local_ba.hpp); no fixed keyframe: SUCCESS without optimizing, as the original. The problem is
-//            copied out and sent; RUNNING.
+//            Inertial with the IMU initialized: mTinit accumulates (the last two steps moved > 5 cm), and
+//            before BA2 too little motion (< 2 cm while mTinit < 10) requests the active map's reset and sets
+//            mbBadImu; then LocalInertialBA (TODO: bLarge = tracking's inliers > 100, bRecInit = !BA2): for now
+//            LocalBundleAdjustment stands in for it. LocalBundleAdjustment: its window and problem (local_ba.hpp);
+//            no fixed keyframe: SUCCESS without optimizing, as the original. The problem is copied out and sent;
+//            RUNNING.
 //   running: the result with the problem's seq is written back by id (local_ba.hpp: the outlier observations
 //            erased, poses, points; what went bad or left the map meanwhile skipped); SUCCESS. Other ticks
 //            (keyframes, commands arriving meanwhile): RUNNING.
@@ -34,7 +35,22 @@ public:
         const map::KeyFrame* kf = atlas->goodKeyFrame(m.current);
         const map::Map* map = kf ? atlas->findMap(kf->map) : nullptr;
         if (!map) return Status::SUCCESS;
-        if (inertial && map->imu_initialized) return Status::SUCCESS;  // TODO LocalInertialBA
+        if (inertial && map->imu_initialized) {
+            const map::KeyFrame* prev = atlas->keyframe(kf->prev);
+            const map::KeyFrame* prev2 = prev ? atlas->keyframe(prev->prev) : nullptr;
+            if (prev && prev2) {
+                const float dist = (prev->cameraCenter() - kf->cameraCenter()).norm() +
+                                   (prev2->cameraCenter() - prev->cameraCenter()).norm();
+                if (dist > 0.05f) m.t_init += float(kf->data->timestamp - prev->data->timestamp);
+                if (!map->imu_ba2 && m.t_init < 10.f && dist < 0.02f) {
+                    // "Not enough motion for initializing. Reseting..."
+                    m.reset = local_mapping::PendingReset::active_map;
+                    m.reset_map = map->id;
+                    m.bad_imu = true;
+                }
+            }
+            // TODO LocalInertialBA; LocalBundleAdjustment meanwhile
+        }
 
         std::optional<ba::Problem> p = orb_local_mapping::localBAProblem(*atlas, m.current);
         if (!p) return Status::SUCCESS;

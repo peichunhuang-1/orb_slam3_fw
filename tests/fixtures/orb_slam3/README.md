@@ -360,3 +360,61 @@ where a tied descriptor choice can also flip.
 
 No full-sequence trajectory from the original: the port's trajectory is checked against the recordings' ground
 truth (ATE) instead.
+
+## imu_init/
+
+`LocalMapping::InitializeIMU` on a small stereo-inertial map, step by step. Made on 2026-11-20. The optimizers,
+`ApplyScaledRotation`, `SetNewBias` and `Reintegrate` are the original's own functions. Two parts of
+`InitializeIMU` itself cannot run without a `Tracking`, so the generator holds a copy of their code: the gravity
+direction and velocity guess, and the correction carried down the spanning tree.
+
+**Scene:** K keyframes along the analytic trajectory, 0.25 s apart from t = 20 s. The last one is current, and each
+keyframe's previous one is the one before it.
+- **Preintegration:** each keyframe's runs from the previous keyframe. It is integrated from the trajectory's
+  IMU samples (true biases gyro (-0.003, 0.021, 0.078), acc (-0.025, 0.11, 0.06), EuRoC noise) at the keyframe's
+  bias.
+- **Scene points** span 3–8 keyframes, as in `local_ba/`; 2 % of the observations are 12–20 px off.
+- **Covisibility:** observations and `UpdateConnections` are added keyframe by keyframe, so each keyframe's parent
+  is an earlier keyframe, as when the keyframes are made.
+- **Noise:** poses are about 0.1° and 5 mm off, points 3 cm off, velocities 2 cm/s off.
+- **The extra keyframe** (index K) is made after `ApplyScaledRotation`, 0.15 s after the current one, in the new
+  frame. It stands for the keyframe tracking queued while `FullInertialBA` ran. Its new points (only it sees them)
+  go into the map with it, as tracking's `CreateNewKeyFrame` puts them. It sees the points of the last three
+  keyframes' spans too, and gets those observations when it is processed after the full BA.
+
+**Inputs**
+- `first`, `prior_g`, `prior_a`, `n_keyframes`.
+- Per keyframe k = 0..K, under `kfk_`: `Tcw`, `timestamp`, `has_velocity` and `velocity`, `bias` (gyro, acc: the
+  preintegration's linearization point), `meas` (the `IntegrateNewMeasurement` arguments: ax ay az wx wy wz dt per
+  row; keyframe 0's preintegration is empty), `kp_left`, `kp_right`, `desc`. For the extra keyframe, use `x_Tcw`,
+  `x_velocity` and `x_bias` instead: they are its state as tracking made it.
+- `points` (reference keyframe, x y z), `kfk_points` (per frame index, a row of `points` or -1), `parent` (each
+  keyframe's parent after the keyframe-by-keyframe build).
+- `x_points` (the extra keyframe's new points) and `x_kf_points` (its points: a row of `points`, or `n_points` +
+  a row of `x_points`).
+
+**Outputs, per step**
+- `guess_Rwg`, `guess_t_init`, `guess_bg`, `guess_ba`, `guess_kfk_velocity`: before `InertialOptimization`. When
+  the map is not initialized these are the dirG / velocity guess; else `Rwg` = I and the current keyframe's bias.
+- `io_Rwg`, `io_scale`, `io_bg`, `io_ba`: after `InertialOptimization`. Per keyframe, `io_kfk_velocity`,
+  `io_kfk_bias`, `io_kfk_reintegrated`, and `io_kfk_lin_bias` (its preintegration's linearization bias after).
+- `asr_kfk_Tcw`, `asr_kfk_velocity`, `asr_points` (x y z, normal x y z): after `ApplyScaledRotation(Twg, scale,
+  true)`.
+- `gba_kfk_Tcw`, `gba_kfk_velocity`, `gba_kfk_bias`, `gba_points` (in the BA, then x y z): `FullInertialBA`'s
+  results with nLoopId = the current keyframe (`mTcwGBA`, `mVwbGBA`, `mBiasGBA`, `mPosGBA`).
+- `x_parent`: the extra keyframe's parent after it is processed.
+- `final_kfk_Tcw`, `final_kfk_velocity`, `final_kfk_bias` (k = 0..K), `final_points` (the extra keyframe's new
+  points last): after the correction from the map's origin keyframe down the spanning tree.
+
+**Cases:**
+- `init`: the first initialization, `InitializeIMU(1e2, 1e5, true)`. 12 keyframes. The map is in the first
+  camera's frame (gravity unknown), the keyframe biases are 0, and there are no velocities.
+- `viba1`: `InitializeIMU(1, 1e5, true)` on an initialized map. 14 keyframes, gravity aligned, every keyframe with
+  the same bias (the truth plus 2e-3 / 3e-2 of noise), velocities set.
+- `viba2`: `InitializeIMU(0, 0, true)`. `InertialOptimization` runs without the user lambda, and `FullInertialBA`
+  runs without bInit: a bias per keyframe, random-walk edges, no priors.
+
+**Reproducibility:** the two optimizations end on flat costs or along unobservable directions. `FullInertialBA`
+has no fixed vertex, so its translation and yaw are free. Their results therefore depend on the last bits of the
+inputs: compare them with tolerances, after aligning the keyframe centres
+(`tests/orb_local_mapping/imu_init_test.cpp` explains the numbers).

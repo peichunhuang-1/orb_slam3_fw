@@ -100,6 +100,28 @@ std::vector<MapPointId> mapPoints(const Atlas& a, MapId m) {
     return v;
 }
 
+void applyScaledRotation(Atlas& a, MapId m, const geometry::SE3f& T, float s, bool scaled_velocity) {
+    Map* M = a.editMap(m);
+    if (!M) return;
+    const Eigen::Matrix3f Ryw = T.rotationMatrix();
+    const Eigen::Vector3f tyw = T.translation();
+    for (const KeyFrameId id : M->keyframes) {
+        KeyFrame* kf = a.editKeyFrame(id);
+        if (!kf) continue;
+        const geometry::SE3f Twc = kf->poseInverse();
+        const geometry::SE3f Tyc = T * geometry::SE3f(Twc.unitQuaternion(), Eigen::Vector3f(Twc.translation() * s));
+        kf->setPose(Tyc.inverse());
+        const Eigen::Vector3f Vw = kf->velocity();
+        kf->setVelocity(scaled_velocity ? Eigen::Vector3f(Ryw * Vw * s) : Eigen::Vector3f(Ryw * Vw));
+    }
+    for (const MapPointId p : mapPoints(a, m)) {
+        MapPoint* mp = a.editPoint(p);
+        mp->pos = s * Ryw * mp->pos + tyw;
+        updateNormalAndDepth(a, p);
+    }
+    ++M->change_index;
+}
+
 void eraseMapFromBowIndex(Atlas& a, MapId m) {
     a.bow_index.eraseIf([&a, m](KeyFrameId k) {
         const KeyFrame* kf = a.keyframe(k);

@@ -79,6 +79,7 @@ struct Tracker {
     imu::Noise imu_noise;                                       // mpImuCalib's
     imu::Bias last_bias;                                        // mLastBias
     std::uint64_t applied_imu_update = 0;  // the last MapperStatus::imu_update_seq applied (UpdateFrameIMU)
+    std::uint64_t applied_tracking_ok = 0;  // the last MapperStatus::tracking_ok_seq applied (mState = OK)
     long first_imu_frame_id = 0;           // mnFirstImuFrameId
 
     bool map_updated = false;  // mbMapUpdated

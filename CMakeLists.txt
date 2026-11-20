@@ -164,6 +164,7 @@ endforeach()
 #   fuse               search_in_neighbors/fuse vs tests/fixtures/orb_slam3/fuse
 #   keyframe_culling   keyframe_culling/culling on synthetic keyframes (bookkeeping)
 #   local_ba           local_bundle_adjustment/local_ba + ba_solver's local kind vs tests/fixtures/orb_slam3/local_ba
+#   imu_init           initialize_imu/imu_init + ba_solver's inertial kinds vs tests/fixtures/orb_slam3/imu_init
 set(ORB_LOCAL_MAPPING_TEST_TYPES types/map/atlas_ops.cpp types/map/bow_index.cpp types/map/vocabulary.cpp
     types/imu/preintegrated.cpp types/camera/kannala_brandt.cpp types/camera/stereo_rig.cpp)
 set(orb_local_mapping_map_point_culling_test_SOURCES algorithms/orb_local_mapping/map_point_culling/culling.cpp)
@@ -172,7 +173,10 @@ set(orb_local_mapping_fuse_test_SOURCES algorithms/orb_local_mapping/search_in_n
 set(orb_local_mapping_keyframe_culling_test_SOURCES algorithms/orb_local_mapping/keyframe_culling/culling.cpp)
 set(orb_local_mapping_local_ba_test_SOURCES algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.cpp
     algorithms/ba_solver/local_ba.cpp)
-foreach(t map_point_culling new_map_points fuse keyframe_culling local_ba)
+set(orb_local_mapping_imu_init_test_SOURCES algorithms/orb_local_mapping/initialize_imu/imu_init.cpp
+    algorithms/orb_local_mapping/shared/process_keyframe.cpp algorithms/ba_solver/inertial.cpp
+    algorithms/ba_solver/inertial_residuals.cpp)
+foreach(t map_point_culling new_map_points fuse keyframe_culling local_ba imu_init)
   add_executable(orb_local_mapping_${t}_test tests/orb_local_mapping/${t}_test.cpp
                  ${orb_local_mapping_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
   target_include_directories(orb_local_mapping_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

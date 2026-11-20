@@ -4,7 +4,8 @@
 // writes the result back by id (algorithms/orb_local_mapping/docs/DESIGN.md, "鎖外計算"). A problem holds no
 // pointer into the atlas: the preintegrations and cameras are copies.
 //
-// The fields are what the four ORB-SLAM3 optimizations need; `local` is solved, the inertial kinds not yet.
+// The fields are what the four ORB-SLAM3 optimizations need; `local`, `inertial_init` and `full_inertial` are
+// solved, `local_inertial` not yet.
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -34,7 +35,7 @@ struct KeyFrameState {
     geometry::SE3f Tcw;
     geometry::SE3f Trl;  // right camera from left (KeyFrame::GetRelativePoseTrl)
     // Inertial kinds
-    bool inertial = false;
+    bool inertial = false;  // bImu: has a velocity (and bias) to optimize
     geometry::SE3f T_cb;
     Eigen::Vector3f velocity = Eigen::Vector3f::Zero();
     imu::Bias bias;
@@ -72,7 +73,8 @@ struct Problem {
     bool large = false;     // LocalInertialBA bLarge
     bool rec_init = false;  // LocalInertialBA bRecInit
     float prior_g = 0, prior_a = 0;
-    // inertial_init: the initial values
+    bool shared_bias = false;  // full_inertial: FullInertialBA's bInit (one bias for all, with the priors)
+    // inertial_init: the initial values (bg, ba: the bias vertices'; Rwg, scale)
     Eigen::Matrix3d Rwg = Eigen::Matrix3d::Identity();
     double scale = 1;
     Eigen::Vector3d bg = Eigen::Vector3d::Zero(), ba = Eigen::Vector3d::Zero();
@@ -82,7 +84,7 @@ struct Result {
     std::uint64_t seq = 0;
     Kind kind = Kind::local;
     bool ok = false;
-    std::vector<KeyFrameState> keyframes;  // id, Tcw, velocity, bias (the preintegration is not sent back)
+    std::vector<KeyFrameState> keyframes;  // id, Tcw, velocity and bias when inertial (no preintegration)
     std::vector<PointState> points;        // id, pos
     struct Erase {
         map::KeyFrameId keyframe = map::kNone;
