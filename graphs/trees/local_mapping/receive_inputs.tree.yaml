@@ -1,15 +1,16 @@
-# What arrived in this tick: InsertKeyFrame, tracking's requests (RequestReset, RequestResetActiveMap,
-# InterruptBA), and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
-# the keys keep the last keyframe and command.
+# What arrived in this tick: tracking's atlas edits (InsertKeyFrame, RequestReset, RequestResetActiveMap), its
+# InterruptBA, and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
+# the keys keep the last edits and command.
 version: 1
 inputs:
-  keyframe:   { type: map/KeyFrameRef }
+  atlas_edits: { type: tracking/AtlasEdits }
   mapper_cmd: { type: tracking/MapperCommand }
   params:     { type: OrbTrackingParams }
 outputs:
   inertial: { type: fw/bool }
   mapper:   { type: tracking/MapperStatus }
 resources:   # the parent's of the same name
+  atlas:        { type: map/Atlas }
   local_mapper: { type: local_mapping/LocalMapper }
 root:
   Sequence:
@@ -18,8 +19,8 @@ root:
       - ForceSuccess:
           child:
             SkipUnlessUpdated:
-              entry: keyframe
-              child: { insert_keyframe: { keyframe: "{keyframe}" } }
+              entry: atlas_edits
+              child: { apply_tracking_edits: { atlas_edits: "{atlas_edits}" } }
       - ForceSuccess:
           child:
             SkipUnlessUpdated:

@@ -21,10 +21,10 @@ void dropOutliers(tracking::Frame& f) {
         if (f.outlier[i]) f.points[i] = map::kNone;
 }
 
-fw::bt::Status relocalize(fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker,
+fw::bt::Status relocalize(fw::Write<tracking::Tracker> tracker,
                           fw::Read<map::Vocabulary> vocabulary) {
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
     f.computeBoW(*vocabulary);
 
@@ -116,5 +116,5 @@ fw::bt::Status relocalize(fw::Write<map::Atlas> atlas, fw::Write<tracking::Track
 }  // namespace
 
 FW_REGISTER_BT_ACTION(relocalize,
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write),
+                      RESOURCES(("tracker", tracking::Tracker, write),
                                 ("vocabulary", map::Vocabulary, read)));

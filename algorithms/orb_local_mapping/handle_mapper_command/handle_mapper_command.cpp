@@ -1,6 +1,5 @@
-// handle_mapper_command: tracking's RequestReset, RequestResetActiveMap and InterruptBA. The resets are done by
-// reset_if_requested / mapper_idle when the keyframe being processed is done (ResetIfRequested's place in Run());
-// tracking does not wait for them.
+// handle_mapper_command: tracking's InterruptBA. Its resets come as atlas edits (apply_tracking_edits), in order
+// with its keyframes.
 #include "fw/fw.hpp"
 #include "types/local_mapping/local_mapper.hpp"
 #include "types/tracking/mapper_command.hpp"
@@ -9,14 +8,7 @@ namespace {
 
 fw::bt::Status handle_mapper_command(const tracking::MapperCommand& mapper_cmd,
                                      fw::Write<local_mapping::LocalMapper> mapper) {
-    local_mapping::LocalMapper& m = *mapper;
-    if (mapper_cmd.reset_all) {
-        m.reset = local_mapping::PendingReset::all;
-    } else if (mapper_cmd.reset_active_map && m.reset != local_mapping::PendingReset::all) {
-        m.reset = local_mapping::PendingReset::active_map;
-        m.reset_map = mapper_cmd.map_id;
-    }
-    if (mapper_cmd.interrupt_ba) m.abort_ba = true;
+    if (mapper_cmd.interrupt_ba) mapper->abort_ba = true;
     return fw::bt::Status::SUCCESS;
 }
 

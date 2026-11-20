@@ -7,12 +7,12 @@ namespace {
 using tracking::State;
 using namespace orb_tracking;
 
-fw::bt::Status track_failed(fw::InOut<State>& state, fw::Read<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker,
+fw::bt::Status track_failed(fw::InOut<State>& state, fw::Write<tracking::Tracker> tracker,
                             bool& ok) {
     tracking::Tracker& t = *tracker;
     ok = false;
     if (state.has_value() && *state == State::OK) {
-        if (t.inertial && (!imuInitialized(*atlas) || !inertialBA2(*atlas))) requestResetActiveMap(t);
+        if (t.inertial && (!imuInitialized(tracker->view) || !inertialBA2(tracker->view))) requestResetActiveMap(t);
         *state = State::RECENTLY_LOST;
         t.timestamp_lost = t.current.timestamp;
     }
@@ -22,5 +22,5 @@ fw::bt::Status track_failed(fw::InOut<State>& state, fw::Read<map::Atlas> atlas,
 }  // namespace
 
 FW_REGISTER_BT_ACTION(track_failed, INPUTS(("state", tracking::State, inout)),
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, write)),
+                      RESOURCES(("tracker", tracking::Tracker, write)),
                       OUTPUTS(("ok", bool)));

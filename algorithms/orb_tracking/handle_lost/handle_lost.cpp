@@ -6,17 +6,20 @@ namespace {
 
 using namespace orb_tracking;
 
-fw::bt::Status handle_lost(fw::InOut<tracking::State>& state, fw::Write<map::Atlas> atlas,
-                           fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status handle_lost(fw::InOut<tracking::State>& state, fw::Write<tracking::Tracker> tracker,
+                           fw::Optional<tracking::AtlasEdits>& atlas_edits) {
     tracking::Tracker& t = *tracker;
-    map::Atlas& a = *atlas;
+    const std::uint64_t seq = t.next_edit_seq;
+    const map::Atlas& a = tracker->view;
     if (!state.has_value()) state.emplace(tracking::State::LOST);
     if (keyFramesInMap(a) <= 10 || (t.inertial && !imuInitialized(a))) requestResetActiveMap(t);
-    else createMapInAtlas(a, t, *state);
+    else createMapInAtlas(t, *state);
+    sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;
 }
 
 }  // namespace
 
 FW_REGISTER_BT_ACTION(handle_lost, INPUTS(("state", tracking::State, inout)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)),
+                      OUTPUTS(("atlas_edits", tracking::AtlasEdits)));

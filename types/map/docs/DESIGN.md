@@ -84,7 +84,7 @@ struct KeyFrame {      // the tile: what changes
 - `preintegrated` 原本是可變的 `shared_ptr`，`setNewBias` 會原地修改。這在 COW 下是錯的，因為舊版本也會跟著被改。現在改成 `shared_ptr<const>`，`KeyFrame::setNewBias` 會複製一份、改好再換掉。
   - 原版的這個物件也和 tracking 的 frame 共用：tracking 的 `t.last.preintegrated` 可能就是最新 keyframe 的那份。原版 local mapping 改 keyframe 的 bias 時，tracking 的 frame 也會跟著變（跨執行緒，時機不固定）；這裡不會跟著變，要等 tracking 套用 `MapperStatus` 的 IMU 結果時，才設成同一個 bias。
   - `create_new_keyframe` 原本呼叫 `kf.setNewBias(f.bias)`，現在改成建立 keyframe **之前**，由 tracking 直接設定 frame 的預積分。這時物件還沒進 atlas，和原版改的是同一個物件、同一個時間點。
-  - 反方向還沒處理：tracking 的 `t.last.setNewBias` 會原地修改一個 atlas 也持有的物件。值和 local mapping 設的一樣，所以目前沒有影響，但第 2 步 tracking 改成只讀時要改成複製。
+  - 反方向：tracking 的 `t.last.setNewBias` 原本會原地修改一個 atlas 也持有的物件。第 2 步起，`apply_mapper_update` 在 `t.last.preintegrated` 與 keyframe 共用時先複製一份再改；`stereo_initialization` 也複製 keyframe 的預積分。
 - `connected`、`children` 這類 `std::map`、`std::set` 改成排序過的 vector（[`flat.hpp`](../flat.hpp) 的 `FlatMap`、`FlatSet`，介面與 `std::map`、`std::set` 相同）。放在 tile 裡也能用，但複製成本比較高。走訪順序同樣依 id，所以結果不變。
 - BoW 由 local mapping 的 `ProcessNewKeyFrame` 計算，算好才寫進 data。所以 data 建好之後就不會再變。
 
@@ -97,29 +97,35 @@ struct KeyFrame {      // the tile: what changes
 
 ## tracking 改成只讀
 
-現在 tracking 會寫 atlas 的地方，全部改成由 local mapping 代寫：
+tracking 的葉節點不再寫入 `atlas` 資源。做法（第 2 步，與原本規劃的覆蓋層不同，見下）：
 
-| 現在 tracking 寫的 | 改成 |
+- **tracking 自己的副本**：`Tracker::view` 是一份 `map::Atlas`。tile 是共用的，所以複製是 O(1)；tracking 在副本上做的修改只會複製被改到的 tile。
+- **每幀開頭同步**：根樹的第一個葉節點 `sync_atlas` 是 tracking 唯一讀取資源的地方。它把 `view` 換成資源目前的版本，再把資源還沒有的 tracking 修改重新套用一次。這一幀其餘的葉節點都只看 `view`，所以整幀讀到的是同一份一致的 atlas，裡面也有 tracking 自己的修改。
+- **修改以訊息送出**：tracking 每個修改都是一筆 `tracking::AtlasEdit`（[`types/tracking/atlas_edits.hpp`](../../tracking/atlas_edits.hpp)），帶遞增的 `seq`。修改立即套用到 `view`，並放進 `Tracker::pending`。有新修改的 tick 由 `atlas_edits` 輸出送出 `pending` 的全部內容；local mapping 的 `apply_tracking_edits` 以 `applyEdit` 依序套用到資源，跳過 `seq <= Atlas::tracking_seq` 的（已套用過）。`sync_atlas` 依 `tracking_seq` 把已套用的從 `pending` 刪掉。訊息只保留最新一筆也不會漏，因為每筆都帶著全部未套用的修改。
+
+| 原本 tracking 寫的 | 改成的 edit |
 |---|---|
-| `++visible`、`++found`（track_local_map） | tracker 自己累加，隨下一個 keyframe 訊息送出，由 local mapping 加進去。culling 只在處理 keyframe 時才看這兩個數，所以語意幾乎不變 |
-| `createKeyFrame`、`createStereoPoint`（create_new_keyframe、stereo_initialization） | keyframe 訊息直接帶上整個新 keyframe 和新的 stereo 點，由 local mapping 插入 |
-| `addRig`（make_frame） | 隨第一個 keyframe 送出 |
-| reset：`clearAtlas`、`clearMap`、`createNewMap` | 改用 `mapper_cmd` 送出，tracking 等 status 的 seq 確認完成後再繼續（原版的 `RequestReset` 本來就會等） |
-| `createMapInAtlas`（start_new_map、handle_lost、handle_discontinuity） | tracking 自己配新的地圖 id，放進 keyframe 訊息 |
+| `++visible`、`++found`（track_local_map） | 累加在 `Tracker::counts`，建立 keyframe 時以 `counts` edit 送出，只加到資源、不重新套用到 `view`。culling 只在處理 keyframe 時才看這兩個數，所以語意幾乎不變 |
+| `createKeyFrame`、`createStereoPoint`（create_new_keyframe、stereo_initialization） | `keyframe` edit：整個新 keyframe、新 stereo 點的 id 與位置、是否插入 local mapping 的佇列 |
+| `addRig`（make_frame） | `add_rig` edit |
+| reset：`clearAtlas`、`clearMap`、`createNewMap`（apply_pending_reset） | `reset_all`、`reset_active_map` edit。local mapping 依序套用，同時丟掉排在它之前的 keyframe、在適當的時機重設自己。原版 tracking 會等 local mapping 重設完（`RequestReset`）；這裡由 edit 的順序保證，tracking 不等 |
+| `createMapInAtlas`（start_new_map、handle_lost、handle_discontinuity） | `new_map`、`map_inertial` edit，地圖 id 由 tracking 配發 |
+| `Map::reference_points`（只供顯示）、`change_notified` | 前者拿掉（沒有顯示）；後者移到 `Tracker::change_notified` |
+
+`mapper_cmd` 只剩 `interrupt_ba`。
 
 ### id 的配置
 
-- keyframe id 由 tracker 配發，它是唯一會建立 keyframe 的地方。loop closing 不會建 keyframe。
-- 點的 id 依來源分開，避免兩邊撞號：tracking 用偶數，local mapping 用奇數。原版的點 id 本來就不連續，也沒有邏輯依賴它。
-- 地圖 id 由 tracker 配發。
+- keyframe id、地圖 id 由 tracking 配發（`view` 裡的 `next_kf_id`、`next_map_id`，隨 edit 帶到資源）。loop closing 不會建 keyframe。
+- 點的 id 依來源分開，避免兩邊撞號：tracking 用偶數（`Atlas::next_tracking_point_id`），local mapping 用奇數（`next_point_id`）。原版的點 id 本來就不連續，也沒有邏輯依賴它。
 
-### tracking 自己的覆蓋層（overlay）
+### 為什麼不用覆蓋層
 
-tracking 送出新 keyframe 之後，到 local mapping 把它插入、快照更新之前，有一段時間快照裡還沒有它。但下一幀馬上就要把它當成參考 keyframe，也要用到它的點。
+原本規劃 tracker 只保留「已送出、快照裡還沒有」的 keyframe 和點，查詢時先查覆蓋層再查快照。改成「副本加重新套用」之後，所有查詢都不用改（照樣查 `view`），也不會漏掉某個查詢路徑；代價只是每幀重新套用幾筆未確認的 edit，通常是零到一筆。
 
-所以 tracker 自己保留「已送出、快照裡還沒有」的 keyframe 和點。查詢時先查這份覆蓋層，再查快照，等快照裡出現了就從覆蓋層刪掉。這是這次改動裡最複雜的地方，在第 2 步實作，用 tracking 的 fixture 驗證結果一致。
+### 已知問題：job 模式不會結束
 
-另一個做法是 tracking 只在建立 keyframe 的那一幀等 local mapping 插入完成。這樣比較簡單，但那幀會被擋到 local mapping 的 tick 結束，等於又回到會擋的情況。所以不建議。
+fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者的 `trigger` 上游時，job 結束時收不到 EOS。tracking（讀 `atlas`）正是 local mapping（寫 `atlas`）的上游，所以 `slam_job` 跑完資料後不會自行結束，要手動停止。已回報 fw。繞過方式是把 `sync_atlas` 宣告為 `write`，但會失去第 3 步 `versioned` 的好處，所以沒有採用。
 
 ## 步驟
 
@@ -127,7 +133,7 @@ tracking 送出新 keyframe 之後，到 local mapping 把它插入、快照更�
 |---|---|---|
 | 0 | TiledMap 與 vector 的效能比較 | **已完成**，見上面的表 |
 | 1 | 換掉底層資料結構（Atlas 改成 COW、KeyFrame 拆成 meta 與 data、容器改成 vector），資源仍用 `writer_pref` | tracking 的 fixture 和 V1_02 的軌跡與現在一致。**已完成**，見下 |
-| 2 | tracking 改成只讀：keyframe 訊息、id 配置、覆蓋層、reset 走 `mapper_cmd` | 同上，另外確認 tracking 的程式只拿 `const Atlas&` |
+| 2 | tracking 改成只讀：tracking 的副本、修改以 edit 送出、id 配置 | 同上，另外確認 tracking 的葉節點不再拿資源。**已完成**，見下 |
 | 3 | `atlas` 改成 `policy: versioned`，量 tracking 的延遲和留住的 tile 數 | tracking 每幀的時間分布不再受 local mapping 影響 |
 | 4 | 填 local mapping 的 stub（照 orb_local_mapping 的設計，寫入改用 `edit`） | local mapping 自己的 fixture |
 
@@ -137,3 +143,9 @@ tracking 送出新 keyframe 之後，到 local mapping 把它插入、快照更�
 - V1_02 的 slam job（tracking 加 local mapping）：每一幀印出狀態、地圖的 keyframe 數與點數、相機位置，和改動前逐行比對。
   - 改動前連跑兩次，結果逐行相同，確認可以重現：1710 幀，結束時 324 個 keyframe、15669 個點。
   - 改動後也逐行相同，每次約 90 秒，和改動前一樣。
+
+### 第 2 步的驗證
+
+- 14 個測試全部通過。
+- V1_02 的 slam job：與第 1 步的輸出逐行相同（1710 幀，324 個 keyframe、15669 個點）。跑完資料後不會自行結束（見上面的已知問題）；暫時把 `sync_atlas` 宣告為 `write` 時，約 93 秒自行結束。
+- tracking 的葉節點都不再宣告 `atlas` 資源，只有 `sync_atlas` 以 `read` 使用。

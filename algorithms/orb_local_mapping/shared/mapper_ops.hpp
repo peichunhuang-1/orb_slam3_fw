@@ -10,7 +10,8 @@ namespace orb_local_mapping {
 // What tracking reads (AcceptKeyFrames, KeyframesInQueue, IsInitializing, ..., the IMU initialization's results)
 tracking::MapperStatus makeStatus(const local_mapping::LocalMapper& m);
 
-// LocalMapping::ResetIfRequested: the queue and the recent points are dropped, the inertial state restarts
+// LocalMapping::ResetIfRequested: the recent points are dropped, the inertial state restarts (the queue: when the
+// reset was applied, apply_tracking_edits)
 void resetIfRequested(local_mapping::LocalMapper& m);
 
 // The current keyframe if it exists, is not bad and is still in a map

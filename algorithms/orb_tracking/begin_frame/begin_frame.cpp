@@ -14,9 +14,9 @@ namespace {
 
 using tracking::State;
 
-fw::bt::Status begin_frame(fw::InOut<State>& state, fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status begin_frame(fw::InOut<State>& state, fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
-    map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
     if (!state.has_value()) state.emplace(State::NO_IMAGES_YET);
 
@@ -39,10 +39,11 @@ fw::bt::Status begin_frame(fw::InOut<State>& state, fw::Write<map::Atlas> atlas,
     }
     t.created_map = false;
 
-    const map::Map& m = a.currentMap();
+    const map::Map& m = a.currentMap();  // made by make_frame
+    int& notified = t.change_notified[m.id];  // the map's mnMapChangeNotified
     t.map_updated = false;
-    if (m.change_index > m.change_notified) {
-        a.editCurrentMap().change_notified = m.change_index;
+    if (m.change_index > notified) {
+        notified = m.change_index;
         t.map_updated = true;
     }
     return fw::bt::Status::SUCCESS;
@@ -51,4 +52,4 @@ fw::bt::Status begin_frame(fw::InOut<State>& state, fw::Write<map::Atlas> atlas,
 }  // namespace
 
 FW_REGISTER_BT_ACTION(begin_frame, INPUTS(("state", tracking::State, inout)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

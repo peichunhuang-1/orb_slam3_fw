@@ -1,22 +1,24 @@
 // apply_pending_reset: System::TrackStereo's reset check before the frame. The reset a leaf asked for in an
 // earlier frame (System::Reset / ResetActiveMap only set a flag) is done here: Tracking::Reset or
-// Tracking::ResetActiveMap, and local mapping is told through mapper_cmd (RequestReset / RequestResetActiveMap).
-#include <list>
+// Tracking::ResetActiveMap. The atlas part is an edit (atlas_edits): local mapping applies it in order with the
+// keyframes and resets itself then (RequestReset / RequestResetActiveMap), so tracking does not wait for it.
+#include <utility>
 
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
-#include "types/map/atlas_ops.hpp"
-#include "types/tracking/mapper_command.hpp"
 
 namespace {
 
 using tracking::State;
 
 // Tracking::Reset
-void resetAll(map::Atlas& a, tracking::Tracker& t, State& state, tracking::MapperCommand& cmd) {
-    cmd.reset_all = true;
-    map::clearAtlas(a);  // and the BoW index (KeyFrameDatabase::clear), keyframe ids from 0
-    map::createNewMap(a);
-    if (t.inertial) a.editCurrentMap().inertial = true;
+void resetAll(tracking::Tracker& t, State& state) {
+    tracking::AtlasEdit e;
+    e.kind = tracking::AtlasEdit::Kind::reset_all;  // clearAtlas and the BoW index (KeyFrameDatabase::clear),
+    e.map = t.view.next_map_id;                     // keyframe ids from 0; then CreateNewMap
+    e.inertial = t.inertial;
+    orb_tracking::addEdit(t, std::move(e));
+    t.counts.clear();  // their points are gone
+    t.change_notified.clear();
     t.initial_frame_id = 0;
     t.next_frame_id = 0;  // Frame::nNextId
     state = State::NO_IMAGES_YET;
@@ -35,12 +37,12 @@ void resetAll(map::Atlas& a, tracking::Tracker& t, State& state, tracking::Mappe
 }
 
 // Tracking::ResetActiveMap
-void resetActiveMap(map::Atlas& a, tracking::Tracker& t, State& state, tracking::MapperCommand& cmd) {
-    const map::MapId m = a.current;
-    cmd.reset_active_map = true;
-    cmd.map_id = m;
-    map::eraseMapFromBowIndex(a, m);  // KeyFrameDatabase::clearMap
-    map::clearMap(a, m);
+void resetActiveMap(tracking::Tracker& t, State& state) {
+    tracking::AtlasEdit e;
+    e.kind = tracking::AtlasEdit::Kind::reset_active_map;  // KeyFrameDatabase::clearMap, Map::clear
+    e.map = t.view.current;
+    orb_tracking::addEdit(t, std::move(e));
+    const map::Atlas& a = t.view;
     t.last_init_frame_id = t.next_frame_id;
     state = State::NO_IMAGES_YET;
 
@@ -63,22 +65,21 @@ void resetActiveMap(map::Atlas& a, tracking::Tracker& t, State& state, tracking:
     t.has_velocity = false;
 }
 
-fw::bt::Status apply_pending_reset(fw::InOut<State>& state, fw::Write<map::Atlas> atlas,
-                                   fw::Write<tracking::Tracker> tracker,
-                                   fw::Optional<tracking::MapperCommand>& mapper_cmd) {
+fw::bt::Status apply_pending_reset(fw::InOut<State>& state, fw::Write<tracking::Tracker> tracker,
+                                   fw::Optional<tracking::AtlasEdits>& atlas_edits) {
     tracking::Tracker& t = *tracker;
     if (t.pending_reset == tracking::PendingReset::none) return fw::bt::Status::SUCCESS;
     if (!state.has_value()) state.emplace(State::NO_IMAGES_YET);
-    tracking::MapperCommand cmd;
-    if (t.pending_reset == tracking::PendingReset::all) resetAll(*atlas, t, *state, cmd);
-    else resetActiveMap(*atlas, t, *state, cmd);
+    const std::uint64_t seq = t.next_edit_seq;
+    if (t.pending_reset == tracking::PendingReset::all) resetAll(t, *state);
+    else resetActiveMap(t, *state);
     t.pending_reset = tracking::PendingReset::none;
-    mapper_cmd = cmd;
+    orb_tracking::sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;
 }
 
 }  // namespace
 
 FW_REGISTER_BT_ACTION(apply_pending_reset, INPUTS(("state", tracking::State, inout)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)),
-                      OUTPUTS(("mapper_cmd", tracking::MapperCommand)));
+                      RESOURCES(("tracker", tracking::Tracker, write)),
+                      OUTPUTS(("atlas_edits", tracking::AtlasEdits)));

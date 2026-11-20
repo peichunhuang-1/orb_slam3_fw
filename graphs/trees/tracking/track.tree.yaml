@@ -7,12 +7,11 @@ inputs:
   mapper:   { type: tracking/MapperStatus }
 outputs:
   state:      { type: tracking/State }
-  keyframe:   { type: map/KeyFrameRef }
+  atlas_edits: { type: tracking/AtlasEdits }
   mapper_cmd: { type: tracking/MapperCommand }
 blackboard:
   ok: { type: fw/bool, init: false }    # Track()'s bOK
 resources:   # the parent's of the same name
-  atlas:      { type: map/Atlas }
   tracker:    { type: tracking/Tracker }
   vocabulary: { type: map/Vocabulary }
 root:
@@ -20,7 +19,7 @@ root:
     children:
       - state_is: { name: lost_at_start, state: "{state}", value: LOST }
       # "A new map is started": ResetActiveMap (< 10 keyframes) or CreateMapInAtlas; nothing else this frame
-      - start_new_map: { state: "{state}" }
+      - start_new_map: { state: "{state}", atlas_edits: "{atlas_edits}" }
       - Sequence:
           children:
             - Fallback:
@@ -49,7 +48,7 @@ root:
                                   children:
                                     - need_new_keyframe: { ok: "{ok}", state: "{state}", params: "{params}",
                                                            mapper: "{mapper}", mapper_cmd: "{mapper_cmd}" }
-                                    - create_new_keyframe: { mapper: "{mapper}", keyframe: "{keyframe}" }
+                                    - create_new_keyframe: { mapper: "{mapper}", atlas_edits: "{atlas_edits}" }
                               - AlwaysSuccess: {}
                         - discard_outliers: {}
                   - AlwaysSuccess: {}
@@ -57,5 +56,5 @@ root:
                 children:
                   - state_is: { name: lost_at_end, state: "{state}", value: LOST }
                   # lost soon after initialization (<= 10 keyframes, inertial: before IMU init): reset; else new map
-                  - handle_lost: { state: "{state}" }
+                  - handle_lost: { state: "{state}", atlas_edits: "{atlas_edits}" }
                   - finish_frame: {}                               # reference keyframe, mLastFrame = current

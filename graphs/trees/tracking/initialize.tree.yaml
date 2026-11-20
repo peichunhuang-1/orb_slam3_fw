@@ -2,9 +2,8 @@
 version: 1
 outputs:
   state:    { type: tracking/State }
-  keyframe: { type: map/KeyFrameRef }
+  atlas_edits: { type: tracking/AtlasEdits }
 resources:   # the parent's of the same name
-  atlas:      { type: map/Atlas }
   tracker:    { type: tracking/Tracker }
   vocabulary: { type: map/Vocabulary }
 root:
@@ -12,5 +11,5 @@ root:
     children:
       # > 500 keypoints (inertial: preintegrated, enough acceleration): first keyframe + its stereo
       # points -> new map, state OK
-      - stereo_initialization: { state: "{state}", keyframe: "{keyframe}" }
+      - stereo_initialization: { state: "{state}", atlas_edits: "{atlas_edits}" }
       - remember_last_frame: {}

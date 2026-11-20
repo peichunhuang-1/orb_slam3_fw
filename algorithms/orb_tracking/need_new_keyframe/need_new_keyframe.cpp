@@ -57,10 +57,9 @@ bool needNewKeyFrame(const map::Atlas& a, const tracking::Tracker& t, const trac
 }
 
 fw::bt::Status need_new_keyframe(const bool& ok, const State& state, const OrbTrackingParams& params,
-                                 fw::Optional<const tracking::MapperStatus&> mapper, fw::Read<map::Atlas> atlas,
-                                 fw::Read<tracking::Tracker> tracker, fw::Optional<tracking::MapperCommand>& mapper_cmd) {
+                                 fw::Optional<const tracking::MapperStatus&> mapper, fw::Read<tracking::Tracker> tracker, fw::Optional<tracking::MapperCommand>& mapper_cmd) {
     const tracking::Tracker& t = *tracker;
-    const bool need = needNewKeyFrame(*atlas, t, mapperOf(mapper), mapper_cmd);
+    const bool need = needNewKeyFrame(tracker->view, t, mapperOf(mapper), mapper_cmd);
     const bool insert = ok || (params.insert_kfs_when_lost && state == State::RECENTLY_LOST && t.inertial);
     return need && insert ? fw::bt::Status::SUCCESS : fw::bt::Status::FAILURE;
 }
@@ -70,5 +69,5 @@ fw::bt::Status need_new_keyframe(const bool& ok, const State& state, const OrbTr
 FW_REGISTER_BT_ACTION(need_new_keyframe,
                       INPUTS(("ok", bool, latest), ("state", tracking::State, latest),
                              ("params", OrbTrackingParams, latest), ("mapper", tracking::MapperStatus, latest)),
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, read)),
+                      RESOURCES(("tracker", tracking::Tracker, read)),
                       OUTPUTS(("mapper_cmd", tracking::MapperCommand)));

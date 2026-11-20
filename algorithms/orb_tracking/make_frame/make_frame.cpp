@@ -3,6 +3,7 @@
 // run: inertial (System::IMU_STEREO) from params.sensor, mMaxFrames and mnFramesToResetIMU from params.fps.
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 #include <Eigen/Geometry>
 
@@ -36,8 +37,17 @@ geometry::SE3f toSE3f(const Eigen::Isometry3d& T) {
 }
 
 // newParameterLoader
-void loadCalib(map::Atlas& a, tracking::Tracker& t, const calib::StereoImuRig& c) {
-    t.rig = map::addRig(a, camera::stereoRigFromCalib(c));
+void loadCalib(tracking::Tracker& t, const calib::StereoImuRig& c) {
+    const camera::StereoRig rig = camera::stereoRigFromCalib(c);
+    t.rig = map::findRig(t.view, rig);
+    if (t.rig < 0) {
+        tracking::AtlasEdit e;
+        e.kind = tracking::AtlasEdit::Kind::add_rig;
+        e.rig_index = t.view.n_rigs;
+        e.rig = rig;
+        t.rig = e.rig_index;
+        orb_tracking::addEdit(t, std::move(e));
+    }
     t.Tlr = toSE3f(c.T_body_left.inverse() * c.T_body_right);  // T_c1_c2
     t.baseline = t.Tlr.translation().norm();
     t.T_cb = toSE3f(c.T_imu_left()).inverse();  // IMU.T_b_c1 -> Tcb
@@ -48,10 +58,10 @@ void loadCalib(map::Atlas& a, tracking::Tracker& t, const calib::StereoImuRig& c
 }
 
 fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoImuRig& calib,
-                          const OrbTrackingParams& params, fw::Write<map::Atlas> atlas,
-                          fw::Write<tracking::Tracker> tracker, bool& inertial) {
+                          const OrbTrackingParams& params, fw::Write<tracking::Tracker> tracker, bool& inertial,
+                          fw::Optional<tracking::AtlasEdits>& atlas_edits) {
     tracking::Tracker& t = *tracker;
-    map::Atlas& a = *atlas;
+    const std::uint64_t seq = t.next_edit_seq;
     if (params.sensor == "stereo_inertial") t.inertial = true;
     else if (params.sensor == "stereo") t.inertial = false;
     else throw std::invalid_argument("orb_tracking: sensor must be stereo or stereo_inertial, not " + params.sensor);
@@ -59,10 +69,21 @@ fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoIm
     t.max_frames = params.fps;
     t.frames_to_reset_imu = params.fps;  // the reference leaves mnFramesToResetIMU unset: its settings' fps
 
-    if (!t.has_calib || !sameCalib(t.calib, calib)) loadCalib(a, t, calib);
+    if (!t.has_calib || !sameCalib(t.calib, calib)) loadCalib(t, calib);
     t.th_depth = t.baseline * float(params.th_depth);
-    if (t.inertial) a.editCurrentMap().inertial = true;  // SetInertialSensor
-    else a.currentMap();
+    // GetCurrentMap makes the first map; SetInertialSensor
+    if (!t.view.hasCurrentMap()) {
+        tracking::AtlasEdit e;
+        e.kind = tracking::AtlasEdit::Kind::new_map;
+        e.map = t.view.next_map_id;
+        e.inertial = t.inertial;
+        orb_tracking::addEdit(t, std::move(e));
+    } else if (t.inertial && !t.view.currentMap().inertial) {
+        tracking::AtlasEdit e;
+        e.kind = tracking::AtlasEdit::Kind::map_inertial;
+        e.map = t.view.current;
+        orb_tracking::addEdit(t, std::move(e));
+    }
 
     tracking::FrameSetup s;
     s.id = t.next_frame_id++;
@@ -75,6 +96,7 @@ fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoIm
     s.T_cb = t.T_cb;
     t.current = tracking::makeFrame(std::static_pointer_cast<const orb::StereoFrame>(frame.any().data), s);
     t.new_keyframe = false;
+    orb_tracking::sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;
 }
 
@@ -83,5 +105,5 @@ fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoIm
 FW_REGISTER_BT_ACTION(make_frame,
                       INPUTS(("frame", orb::StereoFrame, latest), ("calib", calib::StereoImuRig, latest),
                              ("params", OrbTrackingParams, latest)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)),
-                      OUTPUTS(("inertial", bool)));
+                      RESOURCES(("tracker", tracking::Tracker, write)),
+                      OUTPUTS(("inertial", bool), ("atlas_edits", tracking::AtlasEdits)));

@@ -11,10 +11,10 @@
 namespace orb_tracking {
 
 // UpdateLocalMap: the local keyframes (and the reference keyframe: the one sharing most points) and their points
-void updateLocalMap(map::Atlas& atlas, tracking::Tracker& tracker);
+void updateLocalMap(const map::Atlas& atlas, tracking::Tracker& tracker);
 
 // SearchLocalPoints: the local points not in the frame yet, projected and matched
-void searchLocalPoints(map::Atlas& atlas, tracking::Tracker& tracker, tracking::State state,
+void searchLocalPoints(const map::Atlas& atlas, tracking::Tracker& tracker, tracking::State state,
                        const tracking::MapperStatus& mapper);
 
 }  // namespace orb_tracking

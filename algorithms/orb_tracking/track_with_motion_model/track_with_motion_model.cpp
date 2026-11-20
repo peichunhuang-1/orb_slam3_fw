@@ -13,9 +13,9 @@ namespace {
 
 using namespace orb_tracking;
 
-fw::bt::Status track_with_motion_model(fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status track_with_motion_model(fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
 
     // UpdateLastFrame (the visual odometry points are for localization mode only)
@@ -46,4 +46,4 @@ fw::bt::Status track_with_motion_model(fw::Write<map::Atlas> atlas, fw::Write<tr
 }  // namespace
 
 FW_REGISTER_BT_ACTION(track_with_motion_model,
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

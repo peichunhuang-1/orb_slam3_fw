@@ -6,6 +6,8 @@
 // The new frame is not preintegrated yet: begin_frame gives it the new keyframe's bias. So of the original's
 // mCurrentFrame update only the last frame's is done here (the original's mCurrentFrame between two frames is the
 // last frame).
+#include <memory>
+
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 #include "types/geometry/so3.hpp"
 
@@ -13,10 +15,9 @@ namespace {
 
 constexpr float kGravity = 9.81f;  // IMU::GRAVITY_VALUE
 
-fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> mapper, fw::Read<map::Atlas> atlas,
-                                   fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> mapper, fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     if (!mapper.has_value() || mapper->imu_update_seq == 0 || mapper->imu_update_seq == t.applied_imu_update)
         return fw::bt::Status::SUCCESS;
     t.applied_imu_update = mapper->imu_update_seq;
@@ -37,6 +38,11 @@ fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> m
 
     t.last_bias = mapper->imu_bias;
     t.last_keyframe = kf->id;
+    // The last frame's preintegration is also a keyframe's when it was made one: that one is the atlas's (local
+    // mapping gives it the same bias), so the frame takes its own copy. Else it is the one since the last keyframe
+    // (preintegrated_from_kf), changed in place as the original's shared pointer.
+    if (t.last.preintegrated && t.last.preintegrated != t.preintegrated_from_kf)
+        t.last.preintegrated = std::make_shared<imu::Preintegrated>(*t.last.preintegrated);
     t.last.setNewBias(t.last_bias);
 
     // The last frame's state from its keyframe and preintegration
@@ -62,4 +68,4 @@ fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> m
 }  // namespace
 
 FW_REGISTER_BT_ACTION(apply_mapper_update, INPUTS(("mapper", tracking::MapperStatus, latest)),
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

@@ -88,7 +88,7 @@ int main() {
     tracking::MapperStatus ms;
     tracking::MapperCommand mc;
     map::KeyFrameRef kr;
-    check(st.state == tracking::State::NO_IMAGES_YET && ms.accept_keyframes && !mc.reset_all &&
+    check(st.state == tracking::State::NO_IMAGES_YET && ms.accept_keyframes && !mc.interrupt_ba &&
               kr.keyframe_id == map::kNone,
           "defaults");
 

@@ -36,7 +36,7 @@ edges:
   - orb_matcher.stereo -> imu_preintegration.frame
   - imu_preintegration.frame_imu -> tracking.frame
   # tracking <-> local mapping
-  - tracking.keyframe -> local_mapping.keyframe
+  - tracking.atlas_edits -> local_mapping.atlas_edits
   - tracking.mapper_cmd -> local_mapping.mapper_cmd
   - tracking.tracking -> local_mapping.tracking
   - local_mapping.mapper -> tracking.mapper

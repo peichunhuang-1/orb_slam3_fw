@@ -3,6 +3,7 @@
 // mState, which is on the tree's blackboard (algorithms/orb_tracking/docs/DESIGN.md, "資料放在哪裡"). Keyframes
 // and points are referred to by id. Settings (fps, ThDepth, ...) are in the params, not here.
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -10,7 +11,9 @@
 #include "types/calib/stereo_imu_rig.hpp"
 #include "types/geometry/se3.hpp"
 #include "types/imu/preintegrated.hpp"
+#include "types/map/atlas.hpp"
 #include "types/map/ids.hpp"
+#include "types/tracking/atlas_edits.hpp"
 #include "types/tracking/frame.hpp"
 #include "types/tracking/state.hpp"
 
@@ -38,6 +41,15 @@ struct PointScratch {
 };
 
 struct Tracker {
+    // The atlas as tracking sees it (types/map/docs/DESIGN.md, "tracking 改成只讀"): copied from the resource at
+    // the start of each frame (sync_atlas), with the edits it does not have yet applied again. Read it as
+    // const map::Atlas&; change it only through orb_tracking::addEdit, which also sends the change.
+    map::Atlas view;
+    std::vector<std::shared_ptr<const AtlasEdit>> pending;  // made, not in the resource yet (in order)
+    std::uint64_t next_edit_seq = 1;
+    std::map<map::MapPointId, PointCounts> counts;  // since the last keyframe: sent with the next one
+    std::map<map::MapId, int> change_notified;      // Map::mnMapChangeNotified (only tracking uses it)
+
     Frame current, last;  // mCurrentFrame, mLastFrame
     State last_processed_state = State::NO_IMAGES_YET;
     long next_frame_id = 0;  // Frame::nNextId

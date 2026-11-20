@@ -9,19 +9,22 @@ using tracking::State;
 using namespace orb_tracking;
 
 fw::bt::Status handle_discontinuity(fw::InOut<State>& state, fw::Optional<const tracking::MapperStatus&> mapper,
-                                    fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker) {
+                                    fw::Write<tracking::Tracker> tracker,
+                                    fw::Optional<tracking::AtlasEdits>& atlas_edits) {
     tracking::Tracker& t = *tracker;
-    map::Atlas& a = *atlas;
+    const std::uint64_t seq = t.next_edit_seq;
+    const map::Atlas& a = tracker->view;
     if (!state.has_value()) state.emplace(State::NO_IMAGES_YET);
     if (mapperOf(mapper).bad_imu) {
         requestResetActiveMap(t);
     } else if (t.last.timestamp > t.current.timestamp) {
-        createMapInAtlas(a, t, *state);
+        createMapInAtlas(t, *state);
     } else if (imuInitialized(a) && inertialBA2(a)) {
-        createMapInAtlas(a, t, *state);
+        createMapInAtlas(t, *state);
     } else {
         requestResetActiveMap(t);
     }
+    sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;
 }
 
@@ -29,4 +32,5 @@ fw::bt::Status handle_discontinuity(fw::InOut<State>& state, fw::Optional<const 
 
 FW_REGISTER_BT_ACTION(handle_discontinuity,
                       INPUTS(("state", tracking::State, inout), ("mapper", tracking::MapperStatus, latest)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)),
+                      OUTPUTS(("atlas_edits", tracking::AtlasEdits)));

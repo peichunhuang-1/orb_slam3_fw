@@ -4,9 +4,9 @@
 
 namespace {
 
-fw::bt::Status check_replaced_in_last_frame(fw::Read<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status check_replaced_in_last_frame(fw::Write<tracking::Tracker> tracker) {
     for (map::MapPointId& id : tracker->last.points) {
-        const map::MapPoint* p = atlas->point(id);
+        const map::MapPoint* p = tracker->view.point(id);
         if (p && p->replaced != map::kNone) id = p->replaced;
     }
     return fw::bt::Status::SUCCESS;
@@ -15,4 +15,4 @@ fw::bt::Status check_replaced_in_last_frame(fw::Read<map::Atlas> atlas, fw::Writ
 }  // namespace
 
 FW_REGISTER_BT_ACTION(check_replaced_in_last_frame,
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

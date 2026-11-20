@@ -6,13 +6,12 @@ namespace {
 
 using tracking::State;
 
-fw::bt::Status lost_after_pose_failure(fw::InOut<State>& state, fw::Read<map::Atlas> atlas,
-                                       fw::Write<tracking::Tracker> tracker) {
+fw::bt::Status lost_after_pose_failure(fw::InOut<State>& state, fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
     if (!state.has_value()) state.emplace(State::OK);
     if (t.current.id <= t.last_reloc_frame_id + t.frames_to_reset_imu && t.inertial) {
         *state = State::LOST;
-    } else if (orb_tracking::keyFramesInMap(*atlas) > 10) {
+    } else if (orb_tracking::keyFramesInMap(tracker->view) > 10) {
         *state = State::RECENTLY_LOST;
         t.timestamp_lost = t.current.timestamp;
     } else {
@@ -24,4 +23,4 @@ fw::bt::Status lost_after_pose_failure(fw::InOut<State>& state, fw::Read<map::At
 }  // namespace
 
 FW_REGISTER_BT_ACTION(lost_after_pose_failure, INPUTS(("state", tracking::State, inout)),
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

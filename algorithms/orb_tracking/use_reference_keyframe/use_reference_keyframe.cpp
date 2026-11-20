@@ -4,9 +4,9 @@
 
 namespace {
 
-fw::bt::Status use_reference_keyframe(fw::Read<map::Atlas> atlas, fw::Read<tracking::Tracker> tracker) {
+fw::bt::Status use_reference_keyframe(fw::Read<tracking::Tracker> tracker) {
     const tracking::Tracker& t = *tracker;
-    const bool ref = (!t.has_velocity && !orb_tracking::imuInitialized(*atlas)) ||
+    const bool ref = (!t.has_velocity && !orb_tracking::imuInitialized(tracker->view)) ||
                      t.current.id < t.last_reloc_frame_id + 2;
     return ref ? fw::bt::Status::SUCCESS : fw::bt::Status::FAILURE;
 }
@@ -14,4 +14,4 @@ fw::bt::Status use_reference_keyframe(fw::Read<map::Atlas> atlas, fw::Read<track
 }  // namespace
 
 FW_REGISTER_BT_CONDITION(use_reference_keyframe,
-                         RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, read)));
+                         RESOURCES(("tracker", tracking::Tracker, read)));

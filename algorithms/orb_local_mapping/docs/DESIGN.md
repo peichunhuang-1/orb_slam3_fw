@@ -7,7 +7,7 @@
 | | 狀態 |
 |---|---|
 | 樹檔、圖檔、全部葉節點的埠與資源 | 完成，`fw check graphs/slam_job.graph.yaml` 通過（含環的規則） |
-| 簿記：`read_params`、`insert_keyframe`、`handle_mapper_command`、`publish_mapper_status`、`has_new_keyframe`、`queue_empty`、`ready_for_local_ba`、`enough_keyframes_for_ba`、`is_inertial_uninitialized`、`mapper_idle`、`reset_if_requested`、`send_to_loop_closing` | 已實作 |
+| 簿記：`read_params`、`apply_tracking_edits`、`handle_mapper_command`、`publish_mapper_status`、`has_new_keyframe`、`queue_empty`、`ready_for_local_ba`、`enough_keyframes_for_ba`、`is_inertial_uninitialized`、`mapper_idle`、`reset_if_requested`、`send_to_loop_closing` | 已實作 |
 | `process_new_keyframe`（`ProcessNewKeyFrame`） | 已實作（`shared/process_keyframe`） |
 | `local_bundle_adjustment` | 只有流程：送出空的問題、等 `ba_result` 的序號、回傳 SUCCESS；動作窗、問題的內容與寫回是 TODO |
 | `ba_solver` | 只有流程：把問題原樣送回 |
@@ -42,12 +42,12 @@
  │                          ▼                                                                 │
  │   ┌──────────── tracking (behavior) ─────────────┐                                         │
  │   │ frame (trigger)   mapper (latest) ◄──────────┼──────────────────────────────┐          │
- │   │ ──► pose  tracking  keyframe  mapper_cmd     │                              │          │
+ │   │ ──► pose  tracking  atlas_edits  mapper_cmd  │                              │          │
  │   └──────────────────────┬─────────┬────────┬────┘                              │          │
  │              (latest)    │ trigger │ trigger│                                   │          │
  │                          ▼         ▼        ▼                                   │          │
  │   ┌──────────── local_mapping (behavior) ──────────────────────────────────┐    │          │
- │   │ tracking (latest)  keyframe (trigger)  mapper_cmd (trigger)            │    │          │
+ │   │ tracking (latest)  atlas_edits (trigger)  mapper_cmd (trigger)         │    │          │
  │   │ params (latest) ◄── config://orb_tracking.yaml                         │    │          │
  │   │ ba_result (wake) ◄──────────────────────┐                              │    │          │
  │   │                                         │                              │    │          │
@@ -59,14 +59,14 @@
  │              ┌─── ba_solver ───┐  result ──┘     （不接觸任何資源）                         │
  │              └─────────────────┘                                                           │
  │                                                                                            │
- │   atlas (w: tracking, local_mapping)   tracker (w: tracking)                               │
+ │   atlas (r: tracking, w: local_mapping)   tracker (w: tracking)                            │
  │   local_mapper (w: local_mapping)      vocabulary (r: tracking, local_mapping)   （資源）  │
  └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **local_mapping** 是 behavior block，樹是 [`local_mapping.tree.yaml`](../../../graphs/trees/local_mapping/local_mapping.tree.yaml)。tick 的來源有三個：
-  - `keyframe`（`trigger`）：tracking 每建立一個 keyframe 送出一筆，對應 `InsertKeyFrame`；
-  - `mapper_cmd`（`trigger`）：tracking 的 `RequestResetActiveMap`、`RequestReset`、`InterruptBA`；
+  - `atlas_edits`（`trigger`）：tracking 對地圖的修改（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md#tracking-改成只讀)），由 local mapping 寫入 `atlas`。其中新 keyframe 對應 `InsertKeyFrame`，`reset_all`／`reset_active_map` 對應 `RequestReset`／`RequestResetActiveMap`；
+  - `mapper_cmd`（`trigger`）：tracking 的 `InterruptBA`；
   - `ba_result`（`wake`）：`ba_solver` 算完的結果。`wake` 不計入環的規則，也不計入資料結束的判定。
 - `tracking`（`latest`）：tracking 的逐影格狀態。local mapping 只讀其中的 `state`（`CreateNewMapPoints` 的 `bCoarse`、VIBA 的 `mState == OK`）與 `inliers`（`LocalInertialBA` 的 `bLarge`），取代原版直接讀 `mpTracker`。
 - `params`：與 tracking 同一份 `config://orb_tracking.yaml`、同一個型別 `OrbTrackingParams`，只用到 `sensor`。不另開一份設定，免得兩邊的 `sensor` 不一致。
@@ -80,7 +80,7 @@
 
 | 環 | 為什麼成立 |
 |---|---|
-| `tracking.keyframe → local_mapping → mapper → tracking.mapper` | `tracking.mapper` 是 `latest`，讀它的葉節點都以 `fw::Optional` 接收（R1、R2） |
+| `tracking.atlas_edits → local_mapping → mapper → tracking.mapper` | `tracking.mapper` 是 `latest`，讀它的葉節點都以 `fw::Optional` 接收（R1、R2） |
 | `tracking.tracking → local_mapping.tracking` | 同上，`local_mapping.tracking` 是 `latest`，以 `fw::Optional` 接收 |
 | `local_mapping.ba_problem → ba_solver → ba_result` | `ba_result` 是 `wake`，不計入環的規則；`ba_solver.problem` 的佇列深度 2，不觸發 R5 的警告 |
 
@@ -90,16 +90,16 @@
 
 | 原版 | 這裡 |
 |---|---|
-| `InsertKeyFrame`：放進 `mlNewKeyFrames`，`mbAbortBA = true` | `keyframe` 的 tick；`insert_keyframe` 放進 `local_mapper.queue`，設 `abort_ba` |
+| `InsertKeyFrame`：放進 `mlNewKeyFrames`，`mbAbortBA = true` | `atlas_edits` 的 tick；`apply_tracking_edits` 把 keyframe 寫入 `atlas`、放進 `local_mapper.queue`，設 `abort_ba` |
 | `while(1)` 每一輪處理一個 keyframe | `Repeat(-1)` 每個 tick 處理一個 keyframe，fw 自行補 tick 直到佇列空了，或某一步要等最佳化（RUNNING） |
 | `Optimizer::LocalBundleAdjustment` 在 LM 執行緒內算，結束才拿 `mMutexMapUpdate` 寫回 | stateful action：`ON_START` 在鎖內複製問題並送出，回傳 RUNNING；`ba_result` 的 wake tick 進到 `ON_RUNNING`，在鎖內寫回 |
-| `CheckNewKeyFrames()`（佇列是否有下一個） | 看 `local_mapper.queue`。最佳化進行中到達的 keyframe 由 `insert_keyframe` 放進佇列，所以判斷與原版相同 |
+| `CheckNewKeyFrames()`（佇列是否有下一個） | 看 `local_mapper.queue`。最佳化進行中到達的 keyframe 由 `apply_tracking_edits` 放進佇列，所以判斷與原版相同 |
 | `mbAcceptKeyFrames`：處理時 false，閒置時 true | `accept_keyframes` = 沒有 keyframe 正在處理；每個 tick 都送出 `mapper` |
-| `RequestResetActiveMap` 讓 tracking 等到 LM 重設完 | tracking 送出 `mapper_cmd` 後不等（tracking 設計已決定）。LM 記下要求，在這個 keyframe 處理完時（或閒置時）執行，與原版的 `ResetIfRequested` 位置相同 |
+| `RequestResetActiveMap` 讓 tracking 等到 LM 重設完，tracking 才清掉地圖 | tracking 不等：重設是一筆 edit，`apply_tracking_edits` 依序套用（清掉地圖），丟掉排在它之前的 keyframe，LM 自己的 `ResetIfRequested` 在這個 keyframe 處理完時（或閒置時立即）執行，與原版的位置相同 |
 
-**樹的根是 `ReactiveSequence`**：最佳化進行中（某個子節點 RUNNING）時，新的 `keyframe` 或 `mapper_cmd` 的 tick 仍然要被接收。`ReactiveSequence` 每個 tick 都從第一個子節點重新執行，所以 `receive_inputs` 子樹每個 tick 都會跑；後面 RUNNING 的處理子樹則從中斷的地方繼續。`receive_inputs` 只含同步的葉節點，不會打斷後面的 RUNNING 節點。
+**樹的根是 `ReactiveSequence`**：最佳化進行中（某個子節點 RUNNING）時，新的 `atlas_edits` 或 `mapper_cmd` 的 tick 仍然要被接收。`ReactiveSequence` 每個 tick 都從第一個子節點重新執行，所以 `receive_inputs` 子樹每個 tick 都會跑；後面 RUNNING 的處理子樹則從中斷的地方繼續。`receive_inputs` 只含同步的葉節點，不會打斷後面的 RUNNING 節點。
 
-**只處理新到的資料**：鍵只保存最新的值，`ba_result` 的 wake tick 時鍵 `keyframe` 仍是上一筆。`insert_keyframe`、`handle_mapper_command` 各包在 `SkipUnlessUpdated` 裡，只在這個 tick 有新的值時執行。
+**只處理新到的資料**：鍵只保存最新的值，`ba_result` 的 wake tick 時鍵 `atlas_edits` 仍是上一筆。`apply_tracking_edits`、`handle_mapper_command` 各包在 `SkipUnlessUpdated` 裡，只在這個 tick 有新的值時執行。
 
 ## 鎖外計算
 
@@ -140,8 +140,8 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 
 | 放在 | 內容 | 理由 |
 |---|---|---|
-| **埠** | `keyframe`、`mapper_cmd`、`tracking`、`params`；`mapper`、`loop_keyframe`；`ba_problem`、`ba_result` | 單向、不可變 |
-| **資源 `atlas`**（write） | keyframe、map point、地圖（含 `imu_initialized`、`imu_ba1`、`imu_ba2`）、BoW 索引 | 與 tracking 共用 |
+| **埠** | `atlas_edits`、`mapper_cmd`、`tracking`、`params`；`mapper`、`loop_keyframe`；`ba_problem`、`ba_result` | 單向、不可變 |
+| **資源 `atlas`**（write） | keyframe、map point、地圖（含 `imu_initialized`、`imu_ba1`、`imu_ba2`）、BoW 索引 | tracking 只在每幀開頭讀一次（`sync_atlas`），寫入都由 local mapping 做 |
 | **資源 `local_mapper`**（`local_mapping/LocalMapper`，write，只有 local_mapping 用） | `LocalMapping` 的成員：keyframe 佇列（`mlNewKeyFrames`）、目前的 keyframe、`mlpRecentAddedMapPoints`、`abort_ba`、重設要求、`mbInertial`、`mTinit`、`mbBadImu`、`bInitializing`、IMU 初始化的狀態（`mRwg`、`mScale`、`mbg`、`mba`、`mIdxInit`、`mnKFs`）、`UpdateFrameIMU` 與 `mState = OK` 的序號、等待中的最佳化（序號、階段、寫回用的資料）、查詢暫存 | 與 `tracker` 同理：葉節點之間共用的狀態只能放在鍵或資源；這些成員大、每次都和 `atlas` 一起讀寫 |
 | **資源 `vocabulary`**（read） | ORB 詞彙樹 | `ProcessNewKeyFrame` 的 `ComputeBoW` |
 | **鍵** | `inertial`（樹的分支用，由 `receive_inputs` 依 `params.sensor` 寫入） | |
@@ -150,7 +150,7 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 
 **鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。
 
-- 只有接收資料的 tick（最佳化進行中到達的 keyframe、`mapper_cmd`）很短。
+- 只有接收資料的 tick（最佳化進行中到達的 `atlas_edits`、`mapper_cmd`）很短。
 - 處理一個 keyframe 的同步部分（`ProcessNewKeyFrame` 到 `SearchInNeighbors`、`KeyFrameCulling`）在一個 tick 內完成，期間 tracking 等待。原版這些步驟靠每個物件自己的 mutex 與 tracking 同時進行。先量時間：若 `CreateNewMapPoints` 與 `SearchInNeighbors` 在 Pi 上讓 tracking 等太久，再把它們也拆成鎖外計算，或在兩步之間讓出一個 tick。
 
 ## 樹的邏輯
@@ -158,7 +158,7 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 樹分成三個檔案：
 
 ```
-local_mapping                          (根：keyframe、mapper_cmd 的 trigger，ba_result 的 wake)
+local_mapping                          (根：atlas_edits、mapper_cmd 的 trigger，ba_result 的 wake)
 └ ReactiveSequence
   ├ SubTree receive_inputs ───────────────────────────────────────────────┐
   ├ ForceSuccess                                                          │
@@ -173,8 +173,8 @@ local_mapping                          (根：keyframe、mapper_cmd 的 trigger�
 receive_inputs                                                         │ ◄┘
 └ Sequence
   ├ read_params                        inertial（params.sensor）
-  ├ ForceSuccess( SkipUnlessUpdated(keyframe)   → insert_keyframe )        InsertKeyFrame
-  ├ ForceSuccess( SkipUnlessUpdated(mapper_cmd) → handle_mapper_command )  RequestReset*、InterruptBA
+  ├ ForceSuccess( SkipUnlessUpdated(atlas_edits) → apply_tracking_edits ) InsertKeyFrame、RequestReset*
+  ├ ForceSuccess( SkipUnlessUpdated(mapper_cmd)  → handle_mapper_command ) InterruptBA
   └ publish_mapper_status              accept、佇列長度、initializing、bad_imu…
                                                                        │
 process_keyframe                       Run() 的一輪                     ◄┘
@@ -215,8 +215,8 @@ process_keyframe                       Run() 的一輪                     ◄�
 | 葉節點 | 種類 | 埠（鍵） | 資源 | 對應的 ORB-SLAM3 |
 |---|---|---|---|---|
 | `read_params` | action | `params`、`inertial` out | local_mapper w | `mbInertial` |
-| `insert_keyframe` | action | `keyframe` | local_mapper w | `InsertKeyFrame`（`mbAbortBA = true`） |
-| `handle_mapper_command` | action | `mapper_cmd` | local_mapper w | `RequestReset`、`RequestResetActiveMap`（不等待）、`InterruptBA` |
+| `apply_tracking_edits` | action | `atlas_edits` | atlas w、local_mapper w | 套用 tracking 的修改；`InsertKeyFrame`（`mbAbortBA = true`）、`RequestReset`、`RequestResetActiveMap`（不等待） |
+| `handle_mapper_command` | action | `mapper_cmd` | local_mapper w | `InterruptBA` |
 | `publish_mapper_status` | action | `mapper` out | atlas r、local_mapper r | tracking 讀的 `AcceptKeyFrames`、`KeyframesInQueue`、`IsInitializing`、`isStopped`、`stopRequested`、`mbBadImu`、`mbFarPoints` |
 | `has_new_keyframe` | condition | | local_mapper r | `CheckNewKeyFrames() && !mbBadImu` |
 | `mapper_idle` | action | `mapper` out | atlas w、local_mapper w | `Stop()`（之後）、`ResetIfRequested`、`SetAcceptKeyFrames(true)` |

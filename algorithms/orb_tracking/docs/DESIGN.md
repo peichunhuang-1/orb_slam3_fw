@@ -12,7 +12,7 @@
 |---|---|---|
 | 感測器 | stereo 與 stereo-inertial，相機皆為 KB8 | |
 | tracking | `Track()` 的全部分支，含 relocalization（BoW + keyframe 資料庫 + MLPnP）與 IMU 的預積分、預測、重設 | localization only 模式（`mbOnlyTracking`、`mbVO`）：`track` 子樹多一個分支 |
-| local mapping、loop closing | 不做；介面先定好（`keyframe`、`mapper_cmd` 輸出，`mapper` 輸入） | 各自成為一個 block，接上這些埠與 `atlas` 資源 |
+| local mapping、loop closing | 不做；介面先定好（`atlas_edits`、`mapper_cmd` 輸出，`mapper` 輸入） | 各自成為一個 block，接上這些埠與 `atlas` 資源 |
 | 軌跡 | 逐影格送出 `pose` | 讀 `atlas` 與 `tracker` 的 block，在資料結束時以 `SaveTrajectoryEuRoC` 的方式寫到 `out://` |
 
 沒有 local mapping 時：keyframe 只帶著 `CreateNewKeyFrame` 建立的 stereo 點進入地圖，沒有 local BA 與 culling；IMU 永遠不會完成初始化（初始化由 local mapping 執行），stereo-inertial 會以「IMU 未初始化」的分支執行。這兩點都與 ORB-SLAM3 把 local mapping 關掉時的行為相同。
@@ -35,9 +35,9 @@
  │         │ params (latest) ◄── config://orb_tracking.yaml                          │    │
  │         │ mapper (latest) ◄── local_mapping.status                    （之後）    │    │
  │         │                                                                         │    │
- │         │ ──► pose   tracking   keyframe ──► local_mapping（之後）   mapper_cmd ──►│    │
+ │         │ ──► pose   tracking   atlas_edits ──► local_mapping   mapper_cmd ──►     │    │
  │         └─────────────────────────────────────────────────────────────────────────┘    │
- │                 ▲ write              ▲ write               ▲ read                      │
+ │                 ▲ read               ▲ write               ▲ read                      │
  │               atlas               tracker              vocabulary        （資源）      │
  │                 └──► local_mapping、loop_closing（之後）                               │
  └────────────────────────────────────────────────────────────────────────────────────────┘
@@ -50,8 +50,8 @@
 - **輸出**：
   - `pose`：每個追蹤成功的影格送出 body 在 world 中的位姿（由 `Tcw` 與 `calib.T_body_left` 換算），與 `groundtruth` 同一種，可以直接比較。
   - `tracking`：每個影格一筆，含狀態、inlier 數、地圖與 keyframe 數。
-  - `keyframe`：每建立一個 keyframe 送出一筆，交給 local mapping（取代 `InsertKeyFrame`）。
-  - `mapper_cmd`：要求 local mapping 重設地圖或中斷 BA。
+  - `atlas_edits`：tracking 對地圖的修改（新 keyframe 取代 `InsertKeyFrame`、新地圖、相機、重設、點的 visible／found 計數），交給 local mapping 寫入 `atlas`。
+  - `mapper_cmd`：要求 local mapping 中斷 BA。
   - behavior block 另有內建的 `status`。
 
 ## IMU 預積分
@@ -91,11 +91,11 @@ ORB-SLAM3 在 tracking 的執行緒內做 `PreintegrateIMU`：從佇列取出上
 | **資源 `vocabulary`**（`map/Vocabulary`，read） | ORB 詞彙樹（與 DBoW2 的 ORBvoc 同一份資料） | 很大、唯讀、之後 loop closing 也要用。`store:` 在啟動時載入；`fw_save` 不做事，不會寫回 |
 | **鍵**（blackboard） | `state`（`tracking/State`）、`inertial`、`ok`（`bOK`，只在 `track` 子樹內） | 決定樹的分支，樹檔中看得到，執行時在樹分頁的 Keys 面板上可以觀察 |
 
-**鎖的範圍**：behavior block 每個 tick 取一次它用到的資源，整個 tick 持有 `atlas` 與 `tracker` 的寫入鎖，相當於 ORB-SLAM3 在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
+**鎖的範圍**：tracking 只在 `sync_atlas` 讀取 `atlas`（O(1) 複製 tile 共用的副本），其餘時間不持有它；`atlas` 改成 `versioned` 後連這一次也不必等寫入者。ORB-SLAM3 是在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
 
 **以 id 引用，不用指標**：ORB-SLAM3 的物件以指標互相引用（`Frame::mvpMapPoints`、`KeyFrame` 的 covisibility、`MapPoint` 的觀測）。這裡一律改用 id：`tracker`、`Frame`、`KeyFrame`、`MapPoint` 之間只存 keyframe id 與 point id，使用時向 `atlas` 查。因此 `tracker` 不保留任何指向資源內部的指標，符合 fw 的一般規則；重設或刪除後查不到的 id 直接略過，與 ORB-SLAM3 的 `isBad()` 檢查同義。keyframe 與 map point 存放在以 id 為鍵的 `fw::TiledMap`（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md)），每次查詢約 50 ns（5 萬點時）。其他 block 對 keyframe 的引用同樣用 id（`map/KeyFrameRef`）。
 
-**重設延後到下一個 tick**：ORB-SLAM3 的 `System::ResetActiveMap()` 只設定旗標，真正的 `Tracking::ResetActiveMap()` 在下一次 `TrackStereo` 的開頭執行。這裡照樣做：葉節點在 `tracker` 記下重設要求，根樹的第一個葉節點 `apply_pending_reset` 在下一個 tick 執行，同時送出 `mapper_cmd`。`CreateMapInAtlas()` 在 ORB-SLAM3 是立即執行的，這裡也立即執行。
+**重設延後到下一個 tick**：ORB-SLAM3 的 `System::ResetActiveMap()` 只設定旗標，真正的 `Tracking::ResetActiveMap()` 在下一次 `TrackStereo` 的開頭執行。這裡照樣做：葉節點在 `tracker` 記下重設要求，根樹中 `sync_atlas` 之後的 `apply_pending_reset` 在下一個 tick 執行，地圖的部分以 `reset_all`／`reset_active_map` edit 送出，local mapping 依序套用並重設自己，tracking 不等。`CreateMapInAtlas()` 在 ORB-SLAM3 是立即執行的，這裡也立即執行。
 
 ## 樹的邏輯
 
@@ -176,42 +176,43 @@ estimate_pose        （SUCCESS = 初始位姿估計的 bOK）                  
 
 ## 葉節點
 
-全部是函式形式的 condition 或 action，不需要 stateful action，因為每個步驟都在一個 tick 內完成，ORB-SLAM3 的 tracking 本來就是同步的。`atlas`、`tracker`、`vocabulary` 在樹檔中不寫，依同名規則接到樹的資源。
+全部是函式形式的 condition 或 action，不需要 stateful action，因為每個步驟都在一個 tick 內完成，ORB-SLAM3 的 tracking 本來就是同步的。`atlas`、`tracker`、`vocabulary` 在樹檔中不寫，依同名規則接到樹的資源。只有 `sync_atlas` 使用 `atlas` 資源；其餘葉節點讀寫的是 tracker 裡的副本 `tracker.view`，對地圖的修改以 `atlas_edits` 送給 local mapping。
 
 | 葉節點 | 種類 | 埠（鍵） | 資源 | 對應的 ORB-SLAM3 |
 |---|---|---|---|---|
-| `apply_pending_reset` | action | `state` inout、`mapper_cmd` out | atlas w、tracker w | `System::TrackStereo` 的 `mbReset`／`mbResetActiveMap` → `Tracking::Reset`／`ResetActiveMap` |
-| `make_frame` | action | `frame`、`calib`、`params`、`inertial` out | atlas w（`AddCamera`）、tracker w | `newParameterLoader`、`GrabStereoFeatures`（`Frame` 的建構）；`frame.imu` 交給 tracker |
-| `apply_mapper_update` | action | `mapper` Optional | atlas r、tracker w | `UpdateFrameIMU`（由 local mapping 呼叫） |
-| `frame_discontinuity` | condition | `state`、`mapper` Optional | atlas r、tracker r | `Track()` 開頭的 `mbBadImu` 與時間戳記檢查 |
-| `handle_discontinuity` | action | `state` inout、`mapper` Optional | atlas w、tracker w | 同上的處置：`ResetActiveMap` 要求、`CreateMapInAtlas` |
-| `begin_frame` | action | `state` inout | atlas w（`SetLastMapChange`）、tracker w | `SetNewBias`、`PreintegrateIMU` 的後半（這裡改為修正與串接）、`mbCreatedMap`、`GetMapChangeIndex` |
+| `sync_atlas` | action | | atlas r、tracker w | 每幀開頭：`tracker.view` 換成資源目前的版本，再套用資源還沒有的 tracking 修改（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md#tracking-改成只讀)） |
+| `apply_pending_reset` | action | `state` inout、`atlas_edits` out | tracker w | `System::TrackStereo` 的 `mbReset`／`mbResetActiveMap` → `Tracking::Reset`／`ResetActiveMap` |
+| `make_frame` | action | `frame`、`calib`、`params`、`inertial` out、`atlas_edits` out | tracker w | `newParameterLoader`、`GrabStereoFeatures`（`Frame` 的建構）；`frame.imu` 交給 tracker |
+| `apply_mapper_update` | action | `mapper` Optional | tracker w | `UpdateFrameIMU`（由 local mapping 呼叫） |
+| `frame_discontinuity` | condition | `state`、`mapper` Optional | tracker r | `Track()` 開頭的 `mbBadImu` 與時間戳記檢查 |
+| `handle_discontinuity` | action | `state` inout、`mapper` Optional、`atlas_edits` out | tracker w | 同上的處置：`ResetActiveMap` 要求、`CreateMapInAtlas` |
+| `begin_frame` | action | `state` inout | tracker w | `SetNewBias`、`PreintegrateIMU` 的後半（這裡改為修正與串接）、`mbCreatedMap`、`GetMapChangeIndex` |
 | `state_is` | condition | `state`、`value` 常值 | | `mState == …` |
 | `is_true` | condition | `value` | | 分支條件（`inertial`） |
-| `stereo_initialization` | action | `state` inout、`keyframe` out | atlas w、tracker w | `StereoInitialization` |
+| `stereo_initialization` | action | `state` inout、`atlas_edits` out | tracker w | `StereoInitialization` |
 | `remember_last_frame` | action | | tracker w | 初始化失敗時的 `mLastFrame = Frame(mCurrentFrame)` |
-| `start_new_map` | action | `state` inout | atlas w、tracker w | `Track()` 的 `else if (mState == LOST)` 分支 |
-| `check_replaced_in_last_frame` | action | | atlas r、tracker w | `CheckReplacedInLastFrame` |
-| `use_reference_keyframe` | condition | | atlas r、tracker r | `(!mbVelocity && !isImuInitialized) \|\| id < reloc + 2` |
-| `track_reference_keyframe` | action | | atlas w、tracker w、vocabulary r | `TrackReferenceKeyFrame`（`ComputeBoW`、`SearchByBoW`、`PoseOptimization`） |
-| `track_with_motion_model` | action | | atlas w、tracker w | `UpdateLastFrame`、`TrackWithMotionModel` |
-| `lost_after_pose_failure` | action | `state` inout | atlas r、tracker w | `if (!bOK)` 之後的 RECENTLY_LOST／LOST 判定 |
+| `start_new_map` | action | `state` inout、`atlas_edits` out | tracker w | `Track()` 的 `else if (mState == LOST)` 分支 |
+| `check_replaced_in_last_frame` | action | | tracker w | `CheckReplacedInLastFrame` |
+| `use_reference_keyframe` | condition | | tracker r | `(!mbVelocity && !isImuInitialized) \|\| id < reloc + 2` |
+| `track_reference_keyframe` | action | | tracker w、vocabulary r | `TrackReferenceKeyFrame`（`ComputeBoW`、`SearchByBoW`、`PoseOptimization`） |
+| `track_with_motion_model` | action | | tracker w | `UpdateLastFrame`、`TrackWithMotionModel` |
+| `lost_after_pose_failure` | action | `state` inout | tracker w | `if (!bOK)` 之後的 RECENTLY_LOST／LOST 判定 |
 | `lost_time_within` | action | `state` inout、`max_s` 常值 | tracker r | `mTimeStamp - mTimeStampLost > …` → LOST |
-| `predict_state_imu` | action | | atlas r、tracker w | `PredictStateIMU`（IMU 未初始化：FAILURE） |
-| `relocalize` | action | | atlas w、tracker w、vocabulary r | `Relocalization`（KeyFrameDatabase、MLPnP） |
-| `track_local_map` | action | `state`、`mapper` Optional | atlas w、tracker w | `TrackLocalMap`（`UpdateLocalMap`、`SearchLocalPoints`、pose (inertial) optimization） |
+| `predict_state_imu` | action | | tracker w | `PredictStateIMU`（IMU 未初始化：FAILURE） |
+| `relocalize` | action | | tracker w、vocabulary r | `Relocalization`（KeyFrameDatabase、MLPnP） |
+| `track_local_map` | action | `state`、`mapper` Optional | tracker w | `TrackLocalMap`（`UpdateLocalMap`、`SearchLocalPoints`、pose (inertial) optimization） |
 | `tracking_ok` | action | `state` inout、`ok` out | | `bOK` → `mState = OK` |
-| `track_failed` | action | `state` inout、`ok` out | atlas r、tracker w | `else if (mState == OK)` 的 RECENTLY_LOST 與 inertial 重設要求 |
-| `imu_bias_bookkeeping` | action | `ok` | atlas r、tracker w | `ResetFrameIMU`、`mLastBias` |
+| `track_failed` | action | `state` inout、`ok` out | tracker w | `else if (mState == OK)` 的 RECENTLY_LOST 與 inertial 重設要求 |
+| `imu_bias_bookkeeping` | action | `ok` | tracker w | `ResetFrameIMU`、`mLastBias` |
 | `tracked_or_recently_lost` | condition | `ok`、`state` | | `bOK \|\| mState == RECENTLY_LOST` |
 | `update_motion_model` | action | | tracker w | `mVelocity` |
-| `clean_vo_matches` | action | | atlas r、tracker w | Clean VO matches、Delete temporal MapPoints |
-| `need_new_keyframe` | action | `ok`、`state`、`params`、`mapper` Optional、`mapper_cmd` out | atlas r、tracker r | `NeedNewKeyFrame` 加上插入的條件；`InterruptBA` 改為送出 `mapper_cmd` |
-| `create_new_keyframe` | action | `mapper` Optional、`keyframe` out | atlas w、tracker w | `CreateNewKeyFrame`；`InsertKeyFrame` 改為送出 `keyframe` |
+| `clean_vo_matches` | action | | tracker w | Clean VO matches、Delete temporal MapPoints |
+| `need_new_keyframe` | action | `ok`、`state`、`params`、`mapper` Optional、`mapper_cmd` out | tracker r | `NeedNewKeyFrame` 加上插入的條件；`InterruptBA` 改為送出 `mapper_cmd` |
+| `create_new_keyframe` | action | `mapper` Optional、`atlas_edits` out | tracker w | `CreateNewKeyFrame`；`InsertKeyFrame` 改為 `keyframe` edit |
 | `discard_outliers` | action | | tracker w | 丟掉 outlier 的 map point |
-| `handle_lost` | action | `state` inout | atlas w、tracker w | `Track()` 結尾的 `if (mState == LOST)` |
+| `handle_lost` | action | `state` inout、`atlas_edits` out | tracker w | `Track()` 結尾的 `if (mState == LOST)` |
 | `finish_frame` | action | | tracker w | `mpReferenceKF`、`mLastFrame = Frame(mCurrentFrame)` |
-| `publish_frame` | action | `state`、`pose` Optional out、`tracking` out | atlas r、tracker w | 軌跡清單；`pose` 為 body 在 world 中的位姿 |
+| `publish_frame` | action | `state`、`pose` Optional out、`tracking` out | tracker w | 軌跡清單；`pose` 為 body 在 world 中的位姿 |
 
 `need_new_keyframe` 會送出 `mapper_cmd`（中斷 BA），condition 不能有輸出，所以它是 action；回傳 SUCCESS 表示要插入 keyframe。
 
@@ -369,7 +370,8 @@ graphs/trees/tracking/*.tree.yaml
 | `tracking/State` | `types/tracking/state.hpp` | `FW_ENUM`：`NO_IMAGES_YET`、`NOT_INITIALIZED`、`OK`、`RECENTLY_LOST`、`LOST`（`SYSTEM_NOT_READY` 與 `OK_KLT` 在 ORB-SLAM3 中沒有使用，不列入） |
 | `tracking/Status` | `types/tracking/status.hpp` | 訊息。狀態、inlier 數、地圖 id、keyframe 與 map point 數、各階段時間 |
 | `tracking/MapperStatus` | `types/tracking/mapper_status.hpp` | 訊息，local mapping 送出。`accept_keyframes`、`keyframes_in_queue`、`initializing`、`stopped`、`bad_imu`、`far_points`／`th_far_points`，以及 IMU 初始化的結果（序號、scale、bias） |
-| `tracking/MapperCommand` | `types/tracking/mapper_command.hpp` | 訊息。`reset_active_map`（map id）、`reset_all`、`interrupt_ba` |
+| `tracking/MapperCommand` | `types/tracking/mapper_command.hpp` | 訊息。`interrupt_ba` |
+| `tracking/AtlasEdits` | `types/tracking/atlas_edits.hpp` | 訊息。tracking 尚未被套用的地圖修改（`AtlasEdit`，帶 `seq`）；`applyEdit` 套用一筆 |
 | `OrbTrackingParams` | `params/orb_tracking_params.hpp` | 參數。`sensor`（`stereo`、`stereo_inertial`）、`fps`、`th_depth`、`insert_kfs_when_lost`。IMU 雜訊取自 `calib`；`time_recently_lost`（5 s）與 stereo 的 3 s 寫在樹檔中（`lost_time_within` 的 `max_s`） |
 
 ## 已決定的事項

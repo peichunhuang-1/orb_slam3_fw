@@ -16,7 +16,6 @@ struct Map {
     FlatSet<KeyFrameId> keyframes;
     std::size_t n_points = 0;  // MapPoint::in_map ones (MapPointsInMap)
     std::vector<KeyFrameId> keyframe_origins;  // mvpKeyFrameOrigins
-    std::vector<MapPointId> reference_points;   // mvpReferenceMapPoints (drawn only)
 
     KeyFrameId init_kf_id = 0;      // mnInitKFid
     KeyFrameId max_kf_id = 0;       // mnMaxKFid
@@ -28,7 +27,6 @@ struct Map {
     bool imu_ba1 = false, imu_ba2 = false;
     bool in_use = false, bad = false;
     int change_index = 0;           // mnMapChange
-    int change_notified = 0;        // mnMapChangeNotified
     int big_change_index = 0;       // mnBigChangeIdx
 };
 

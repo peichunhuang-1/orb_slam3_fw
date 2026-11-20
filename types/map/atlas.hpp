@@ -4,16 +4,22 @@
 // it consistent are in atlas_ops.hpp.
 //
 // Storage (types/map/docs/DESIGN.md): a COW type of fw::TiledMap, one tile per keyframe, point, map, rig and BoW
-// word, so a copy is O(1) and a change copies only the tiles it touches. Ids are given in order, from 0. A
-// keyframe or point stays after it goes bad (ORB-SLAM3 keeps the object: GetReplaced, the trajectory's reference
-// keyframes); only clearAtlas empties them, and ids then start again at 0 (ORB-SLAM3's Reset sets
-// KeyFrame::nNextId = 0; its point ids go on, which no logic depends on).
+// word, so a copy is O(1) and a change copies only the tiles it touches. A keyframe or point stays after it goes
+// bad (ORB-SLAM3 keeps the object: GetReplaced, the trajectory's reference keyframes); only clearAtlas empties
+// them, and ids then start again (ORB-SLAM3's Reset sets KeyFrame::nNextId = 0; its point ids go on, which no
+// logic depends on).
+//
+// Ids are given in order. Keyframes and maps are made by tracking only; map points by tracking (even ids) and by
+// local mapping (odd), so neither has to wait for the other to number a new point. Tracking does not change this
+// resource: it sends its changes (tracking::AtlasEdit) and local mapping applies them; tracking_seq is the last
+// one applied (types/map/docs/DESIGN.md, "tracking 改成只讀").
 //
 // Reading: keyframe(), point(), findMap() (const). Changing: editKeyFrame(), editPoint(), editMap(); they copy
 // the tile on its first edit in a version and give a pointer to this version's own. That pointer, and any const
 // one taken before, stay valid until the atlas is copied, assigned or cleared, or the handler that got the atlas
 // returns; a const pointer taken before an edit of the same tile shows the tile as it was.
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 #include "fw/fw.hpp"
@@ -37,8 +43,10 @@ struct Atlas {
     KeyFrameId last_init_kf_id = 0;                // mnLastInitKFidMap
     MapId next_map_id = 0;                         // Map::nNextId (never reset)
     KeyFrameId next_keyframe_id = 0;               // KeyFrame::nNextId
-    MapPointId next_point_id = 0;                  // MapPoint::nNextId
+    MapPointId next_point_id = 1;                  // MapPoint::nNextId of local mapping's points (odd)
+    MapPointId next_tracking_point_id = 0;         // of tracking's (even)
     int n_rigs = 0;
+    std::uint64_t tracking_seq = 0;                // the last tracking::AtlasEdit applied (0: none)
 
     // nullptr if there is no such keyframe / point (never made, or cleared)
     const KeyFrame* keyframe(KeyFrameId id) const { return keyframes.find(id); }
@@ -73,5 +81,5 @@ struct Atlas {
 }  // namespace map
 
 FW_COW_TYPE(map::Atlas, keyframes, points, maps, bad_maps, rigs, bow_index, current, last_init_kf_id, next_map_id,
-            next_keyframe_id, next_point_id, n_rigs);
+            next_keyframe_id, next_point_id, next_tracking_point_id, n_rigs, tracking_seq);
 FW_REGISTER_TYPE(map::Atlas, "map/Atlas")

@@ -22,8 +22,8 @@ tracking::MapperStatus makeStatus(const local_mapping::LocalMapper& m) {
 
 void resetIfRequested(local_mapping::LocalMapper& m) {
     if (m.reset == local_mapping::PendingReset::none) return;
-    // Both kinds do the same here (the atlas itself is reset by tracking)
-    m.queue.clear();
+    // Both kinds do the same here. The atlas was reset, and the queue emptied, when tracking's edit was applied
+    // (apply_tracking_edits): the keyframes queued since are after the reset and stay.
     m.recent_points.clear();
     m.t_init = 0;
     m.bad_imu = false;

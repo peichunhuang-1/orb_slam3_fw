@@ -50,9 +50,9 @@ void optimize(const map::Atlas& a, tracking::Tracker& t) {
 }
 
 fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::MapperStatus&> mapper,
-                               fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker) {
+                               fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
-    map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
 
     updateLocalMap(a, t);
@@ -66,7 +66,7 @@ fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::
         const map::MapPoint* p = a.point(f.points[i]);
         if (!f.outlier[i]) {
             if (p) {
-                ++a.editPoint(f.points[i])->found;
+                ++t.counts[f.points[i]].found;  // IncreaseFound
                 if (p->n_obs > 0) ++t.matches_inliers;
             }
         } else if (!t.inertial) {
@@ -84,4 +84,4 @@ fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::
 
 FW_REGISTER_BT_ACTION(track_local_map,
                       INPUTS(("state", tracking::State, latest), ("mapper", tracking::MapperStatus, latest)),
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)));

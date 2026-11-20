@@ -1,10 +1,10 @@
 # ORB-SLAM3 local mapping (KB8 stereo / stereo-inertial): LocalMapping::Run() driven by ticks instead of a thread.
-# Ticks: a keyframe from tracking (InsertKeyFrame), a command from tracking (reset / interrupt BA), and the
+# Ticks: atlas edits from tracking (InsertKeyFrame, resets), a command from tracking (interrupt BA), and the
 # result of an optimization ba_solver computed outside the lock (wake).
 # Design: algorithms/orb_local_mapping/docs/DESIGN.md
 version: 1
 inputs:
-  keyframe:   { type: map/KeyFrameRef, mode: trigger, queue: { depth: 16, policy: drop_oldest } }
+  atlas_edits: { type: tracking/AtlasEdits, mode: trigger, queue: { depth: 16, policy: drop_oldest } }
   mapper_cmd: { type: tracking/MapperCommand, mode: trigger, queue: { depth: 8, policy: drop_oldest } }
   ba_result:  { type: ba/Result, mode: wake, queue: { depth: 2, policy: drop_oldest } }
   tracking:   { type: tracking/Status }             # latest: tracking's state and inliers (mpTracker)
@@ -23,7 +23,7 @@ root:
   ReactiveSequence:
     children:
       # Every tick, even while an optimization is running further down
-      - SubTree: { tree: trees/local_mapping/receive_inputs.tree.yaml, name: receive_inputs, keyframe: "{keyframe}",
+      - SubTree: { tree: trees/local_mapping/receive_inputs.tree.yaml, name: receive_inputs, atlas_edits: "{atlas_edits}",
                    mapper_cmd: "{mapper_cmd}", params: "{params}", inertial: "{inertial}", mapper: "{mapper}" }
       # Run()'s while(1): one keyframe per round, in this tick, until the queue is empty or a step waits
       - ForceSuccess:

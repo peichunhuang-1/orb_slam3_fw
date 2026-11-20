@@ -11,10 +11,10 @@ namespace {
 
 using tracking::State;
 
-fw::bt::Status publish_frame(const State& state, fw::Read<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker,
+fw::bt::Status publish_frame(const State& state, fw::Write<tracking::Tracker> tracker,
                              fw::Optional<fw::PoseStamped>& pose, tracking::Status& status) {
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     const tracking::Frame& f = t.current;
     const bool tracked = state == State::OK || state == State::RECENTLY_LOST;
 
@@ -70,5 +70,5 @@ fw::bt::Status publish_frame(const State& state, fw::Read<map::Atlas> atlas, fw:
 }  // namespace
 
 FW_REGISTER_BT_ACTION(publish_frame, INPUTS(("state", tracking::State, latest)),
-                      RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, write)),
+                      RESOURCES(("tracker", tracking::Tracker, write)),
                       OUTPUTS(("pose", fw::PoseStamped), ("tracking", tracking::Status)));

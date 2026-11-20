@@ -1,6 +1,7 @@
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 #include "types/geometry/so3.hpp"
 #include "types/map/atlas_ops.hpp"
@@ -27,14 +28,44 @@ const tracking::MapperStatus& mapperOf(const fw::Optional<const tracking::Mapper
     return m.has_value() ? *m : idle;
 }
 
+void addEdit(tracking::Tracker& t, tracking::AtlasEdit e) {
+    e.seq = t.next_edit_seq++;
+    auto p = std::make_shared<const tracking::AtlasEdit>(std::move(e));
+    applyToView(t, *p);
+    t.pending.push_back(std::move(p));
+}
+
+void applyToView(tracking::Tracker& t, const tracking::AtlasEdit& e) {
+    if (e.kind != tracking::AtlasEdit::Kind::counts) tracking::applyEdit(t.view, e);
+}
+
+void flushCounts(tracking::Tracker& t) {
+    if (t.counts.empty()) return;
+    tracking::AtlasEdit e;
+    e.kind = tracking::AtlasEdit::Kind::counts;
+    e.counts.assign(t.counts.begin(), t.counts.end());
+    t.counts.clear();
+    addEdit(t, std::move(e));
+}
+
+void sendEdits(const tracking::Tracker& t, std::uint64_t seq_before, fw::Optional<tracking::AtlasEdits>& out) {
+    if (t.next_edit_seq == seq_before) return;
+    tracking::AtlasEdits m;
+    m.edits = t.pending;
+    out = std::move(m);
+}
+
 void requestResetActiveMap(tracking::Tracker& t) {
     if (t.pending_reset == tracking::PendingReset::none) t.pending_reset = tracking::PendingReset::active_map;
 }
 
-void createMapInAtlas(map::Atlas& a, tracking::Tracker& t, tracking::State& state) {
+void createMapInAtlas(tracking::Tracker& t, tracking::State& state) {
     t.last_init_frame_id = t.current.id;
-    map::createNewMap(a);
-    if (t.inertial) a.editCurrentMap().inertial = true;  // SetInertialSensor
+    tracking::AtlasEdit e;
+    e.kind = tracking::AtlasEdit::Kind::new_map;
+    e.map = t.view.next_map_id;
+    e.inertial = t.inertial;  // SetInertialSensor
+    addEdit(t, std::move(e));
     t.initial_frame_id = t.current.id + 1;
     state = tracking::State::NO_IMAGES_YET;
     t.has_velocity = false;

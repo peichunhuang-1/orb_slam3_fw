@@ -13,7 +13,7 @@ namespace {
 
 constexpr int kThHigh = 100;  // TH_HIGH
 
-void updateLocalKeyFrames(map::Atlas& a, tracking::Tracker& t) {
+void updateLocalKeyFrames(const map::Atlas& a, tracking::Tracker& t) {
     tracking::Frame& f = t.current;
     // Each point votes for the keyframes observing it (the current frame's points; with the IMU initialized and
     // no recent relocalization the last frame's, as the current one has no matches yet). Bad points leave.
@@ -260,13 +260,12 @@ int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool
 
 }  // namespace
 
-void updateLocalMap(map::Atlas& a, tracking::Tracker& t) {
-    if (map::Map* m = a.editMap(a.current)) m->reference_points = t.local_points;  // for drawing
+void updateLocalMap(const map::Atlas& a, tracking::Tracker& t) {
     updateLocalKeyFrames(a, t);
     updateLocalPoints(a, t);
 }
 
-void searchLocalPoints(map::Atlas& a, tracking::Tracker& t, tracking::State state, const tracking::MapperStatus& mapper) {
+void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::State state, const tracking::MapperStatus& mapper) {
     tracking::Frame& f = t.current;
     // The frame's points are not searched again
     for (map::MapPointId& id : f.points) {
@@ -276,7 +275,7 @@ void searchLocalPoints(map::Atlas& a, tracking::Tracker& t, tracking::State stat
             id = map::kNone;
             continue;
         }
-        ++a.editPoint(id)->visible;
+        ++t.counts[id].visible;  // IncreaseVisible
         tracking::PointScratch& s = pointScratch(t, id);
         s.last_frame_seen = f.id;
         s.in_view = false;
@@ -292,7 +291,7 @@ void searchLocalPoints(map::Atlas& a, tracking::Tracker& t, tracking::State stat
         const map::MapPoint* p = a.point(id);
         if (!p || p->bad) continue;
         if (isInFrustum(f, rig, *p, 0.5f, s)) {
-            ++a.editPoint(id)->visible;
+            ++t.counts[id].visible;  // IncreaseVisible
             ++to_match;
         }
     }

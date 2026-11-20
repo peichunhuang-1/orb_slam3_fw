@@ -5,6 +5,7 @@
 
 #include "fw/fw.hpp"
 #include "types/map/atlas.hpp"
+#include "types/tracking/atlas_edits.hpp"
 #include "types/tracking/frame.hpp"
 #include "types/tracking/mapper_status.hpp"
 #include "types/tracking/state.hpp"
@@ -20,11 +21,22 @@ bool inertialBA2(const map::Atlas& a);     // GetIniertialBA2
 // ---- local mapping, seen through its status (none: idle, accepting keyframes, the IMU not initialized)
 const tracking::MapperStatus& mapperOf(const fw::Optional<const tracking::MapperStatus&>& m);
 
+// ---- changing the atlas (types/map/docs/DESIGN.md, "tracking 改成只讀")
+// e gets the next sequence number, is applied to t.view and joins t.pending
+void addEdit(tracking::Tracker& t, tracking::AtlasEdit e);
+// An edit applied to t.view (addEdit, and sync_atlas again on each new copy). Not the counts: tracking never
+// reads them, and they would copy every local map point's tile each frame
+void applyToView(tracking::Tracker& t, const tracking::AtlasEdit& e);
+// IncreaseVisible / IncreaseFound since the last keyframe (t.counts) as an edit, before the keyframe's
+void flushCounts(tracking::Tracker& t);
+// The pending edits to out if the leaf made one (t.next_edit_seq moved past seq_before)
+void sendEdits(const tracking::Tracker& t, std::uint64_t seq_before, fw::Optional<tracking::AtlasEdits>& out);
+
 // ---- resets
 // System::ResetActiveMap: done at the start of the next frame (apply_pending_reset); a full reset wins
 void requestResetActiveMap(tracking::Tracker& t);
 // Tracking::CreateMapInAtlas: a new current map, the state back to NO_IMAGES_YET, no last/current frame
-void createMapInAtlas(map::Atlas& a, tracking::Tracker& t, tracking::State& state);
+void createMapInAtlas(tracking::Tracker& t, tracking::State& state);
 
 // ---- IMU
 // Tracking::PredictStateIMU: the current frame's body state from the last keyframe (map updated) or the last

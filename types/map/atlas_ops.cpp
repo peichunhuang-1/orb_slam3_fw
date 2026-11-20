@@ -60,13 +60,14 @@ const Map& Atlas::currentMap() const {
 
 // ---- maps
 
-MapId createNewMap(Atlas& a) {
+MapId createNewMap(Atlas& a, MapId id) {
     if (Map* cur = a.editMap(a.current)) {
         if (!a.maps.empty() && a.last_init_kf_id < cur->max_kf_id) a.last_init_kf_id = cur->max_kf_id + 1;
         cur->in_use = false;  // SetStoredMap
     }
     Map m;  // Map(initKFid)
-    m.id = a.next_map_id++;
+    m.id = id != kNone ? id : a.next_map_id;
+    if (m.id >= a.next_map_id) a.next_map_id = m.id + 1;
     m.init_kf_id = a.last_init_kf_id;
     m.max_kf_id = a.last_init_kf_id;
     m.in_use = true;  // SetCurrentMap
@@ -85,7 +86,6 @@ void clearMap(Atlas& a, MapId id) {
     m->keyframes.clear();
     m->max_kf_id = m->init_kf_id;
     m->imu_initialized = false;
-    m->reference_points.clear();
     m->keyframe_origins.clear();
     m->imu_ba1 = false;
     m->imu_ba2 = false;
@@ -115,31 +115,48 @@ void clearAtlas(Atlas& a) {
     a.keyframes = {};
     a.next_keyframe_id = 0;  // KeyFrame::nNextId = 0
     a.points = {};
-    a.next_point_id = 0;
+    a.next_point_id = 1;
+    a.next_tracking_point_id = 0;
 }
 
-int addRig(Atlas& a, const camera::StereoRig& rig) {
+int findRig(const Atlas& a, const camera::StereoRig& rig) {
     for (int i = 0; i < a.n_rigs; ++i) {
         const camera::StereoRig& r = a.rig(i);
         if (sameCamera(r.camera(0), rig.camera(0)) && sameCamera(r.camera(1), rig.camera(1)) &&
             r.R_12() == rig.R_12() && r.t_12() == rig.t_12())
             return i;
     }
+    return -1;
+}
+
+int addRig(Atlas& a, const camera::StereoRig& rig) {
+    if (const int i = findRig(a, rig); i >= 0) return i;
     a.rigs.edit(a.n_rigs).set(rig);
     return a.n_rigs++;
 }
 
 // ---- keyframes
 
-KeyFrameId createKeyFrame(Atlas& a, KeyFrame kf) {
+void prepareKeyFrame(const Atlas& a, KeyFrame& kf) {
     const Map& m = a.currentMap();
-    kf.id = a.next_keyframe_id++;
+    kf.id = a.next_keyframe_id;
     kf.map = m.id;
     kf.origin_map = m.id;
     kf.imu = m.imu_initialized;
     if (kf.points.size() != std::size_t(kf.size())) kf.points.assign(std::size_t(kf.size()), kNone);
+}
+
+void putKeyFrame(Atlas& a, KeyFrame kf) {
     const KeyFrameId id = kf.id;
+    if (id >= a.next_keyframe_id) a.next_keyframe_id = id + 1;
     a.keyframes.edit(id).set(std::move(kf));
+}
+
+KeyFrameId createKeyFrame(Atlas& a, KeyFrame kf) {
+    a.currentMap();  // made if there is none
+    prepareKeyFrame(a, kf);
+    const KeyFrameId id = kf.id;
+    putKeyFrame(a, std::move(kf));
     return id;
 }
 
@@ -336,20 +353,26 @@ int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs) {
 
 // ---- map points
 
-MapPointId createMapPoint(Atlas& a, const Eigen::Vector3f& pos, KeyFrameId ref) {
+MapPointId createMapPoint(Atlas& a, const Eigen::Vector3f& pos, KeyFrameId ref, MapPointId id) {
     const KeyFrame* kf = a.keyframe(ref);
     if (!kf) throw std::invalid_argument("map::createMapPoint: no reference keyframe");
     MapPoint p;
-    p.id = a.next_point_id++;
+    if (id == kNone) {
+        p.id = a.next_point_id;
+        a.next_point_id += 2;
+    } else {
+        p.id = id;  // tracking's
+        if (id % 2 == 0 && id >= a.next_tracking_point_id) a.next_tracking_point_id = id + 2;
+    }
     p.map = kf->map;
     p.origin_map = kf->map;
     p.first_kf = ref;
     p.first_frame = kf->data->frame_id;
     p.ref_kf = ref;
     p.pos = pos;
-    const MapPointId id = p.id;
-    a.points.edit(id).set(std::move(p));
-    return id;
+    const MapPointId pid = p.id;
+    a.points.edit(pid).set(std::move(p));
+    return pid;
 }
 
 void insertMapPoint(Atlas& a, MapPointId pid) {
@@ -498,8 +521,8 @@ void updateNormalAndDepth(Atlas& a, MapPointId pid) {
     pe->normal = normal / float(n);
 }
 
-MapPointId createStereoPoint(Atlas& a, KeyFrameId k, int i, const Eigen::Vector3f& pos) {
-    const MapPointId pid = createMapPoint(a, pos, k);
+MapPointId createStereoPoint(Atlas& a, KeyFrameId k, int i, const Eigen::Vector3f& pos, MapPointId id) {
+    const MapPointId pid = createMapPoint(a, pos, k, id);
     KeyFrame* kf = a.editKeyFrame(k);
     addObservation(a, pid, k, i);
     const int r = kf->data->features->rightOf(i);

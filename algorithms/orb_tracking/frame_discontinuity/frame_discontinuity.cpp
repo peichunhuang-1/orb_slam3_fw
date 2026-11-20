@@ -7,12 +7,12 @@ namespace {
 using tracking::State;
 
 fw::bt::Status frame_discontinuity(const State& state, fw::Optional<const tracking::MapperStatus&> mapper,
-                                   fw::Read<map::Atlas> atlas, fw::Read<tracking::Tracker> tracker) {
+                                   fw::Read<tracking::Tracker> tracker) {
     const tracking::Tracker& t = *tracker;
     if (orb_tracking::mapperOf(mapper).bad_imu) return fw::bt::Status::SUCCESS;
     if (state == State::NO_IMAGES_YET) return fw::bt::Status::FAILURE;
     if (t.last.timestamp > t.current.timestamp) return fw::bt::Status::SUCCESS;
-    const map::Map* m = atlas->findMap(atlas->current);
+    const map::Map* m = tracker->view.findMap(tracker->view.current);
     if (t.current.timestamp > t.last.timestamp + 1.0 && m && m->inertial) return fw::bt::Status::SUCCESS;
     return fw::bt::Status::FAILURE;
 }
@@ -21,4 +21,4 @@ fw::bt::Status frame_discontinuity(const State& state, fw::Optional<const tracki
 
 FW_REGISTER_BT_CONDITION(frame_discontinuity,
                          INPUTS(("state", tracking::State, latest), ("mapper", tracking::MapperStatus, latest)),
-                         RESOURCES(("atlas", map::Atlas, read), ("tracker", tracking::Tracker, read)));
+                         RESOURCES(("tracker", tracking::Tracker, read)));

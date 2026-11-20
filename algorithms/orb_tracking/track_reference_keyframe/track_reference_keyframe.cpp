@@ -9,10 +9,10 @@ namespace {
 
 using namespace orb_tracking;
 
-fw::bt::Status track_reference_keyframe(fw::Write<map::Atlas> atlas, fw::Write<tracking::Tracker> tracker,
+fw::bt::Status track_reference_keyframe(fw::Write<tracking::Tracker> tracker,
                                         fw::Read<map::Vocabulary> vocabulary) {
     tracking::Tracker& t = *tracker;
-    const map::Atlas& a = *atlas;
+    const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
     f.computeBoW(*vocabulary);
     const map::KeyFrame* ref = a.keyframe(t.reference_kf);
@@ -33,5 +33,5 @@ fw::bt::Status track_reference_keyframe(fw::Write<map::Atlas> atlas, fw::Write<t
 }  // namespace
 
 FW_REGISTER_BT_ACTION(track_reference_keyframe,
-                      RESOURCES(("atlas", map::Atlas, write), ("tracker", tracking::Tracker, write),
+                      RESOURCES(("tracker", tracking::Tracker, write),
                                 ("vocabulary", map::Vocabulary, read)));
