@@ -60,7 +60,7 @@ fw::bt::Status publish_frame(const State& state, fw::Read<map::Atlas> atlas, fw:
     status.maps = int(a.maps.size());
     if (const map::Map* m = a.findMap(a.current)) {
         status.keyframes = m->keyframes.size();
-        status.points = m->points.size();
+        status.points = m->n_points;
     }
     status.new_keyframe = t.new_keyframe;
     status.relocalized = f.valid() && t.last_reloc_frame_id == f.id && tracked;

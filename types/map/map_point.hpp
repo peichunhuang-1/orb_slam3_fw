@@ -1,17 +1,18 @@
 #pragma once
 // A map point (ORB-SLAM3's MapPoint), data only; the operations that keep it consistent with its keyframes are
 // in atlas_ops.hpp. Observations are keyed by keyframe id; ORB-SLAM3 keys them by pointer, so where its order
-// matters (the representative descriptor, the new reference keyframe) this one is by id.
+// matters (the representative descriptor, the new reference keyframe) this one is by id. It is an atlas tile
+// (types/map/docs/DESIGN.md).
 //
 // The per-frame scratch ORB-SLAM3 keeps on the point (mTrackProjX, mbTrackInView, mnLastFrameSeen,
 // mnTrackReferenceForFrame, ...) belongs to tracking and lives there.
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <map>
 
 #include <Eigen/Core>
 
+#include "types/map/flat.hpp"
 #include "types/map/ids.hpp"
 
 namespace map {
@@ -33,11 +34,12 @@ struct MapPoint {
     std::array<std::uint8_t, 32> descriptor{};         // the representative one
     KeyFrameId ref_kf = kNone;
 
-    std::map<KeyFrameId, Observation> observations;
+    FlatMap<KeyFrameId, Observation> observations;
     int n_obs = 0;  // features that see it (a stereo observation counts 2)
 
     int visible = 1, found = 1;  // mnVisible, mnFound
     bool bad = false;
+    bool in_map = false;          // counted in its map's n_points (Map::AddMapPoint, until EraseMapPoint)
     MapPointId replaced = kNone;  // set by replace (fused into another point)
 
     float min_distance = 0, max_distance = 0;  // scale invariance

@@ -1,17 +1,20 @@
 #pragma once
-// One map of the atlas (ORB-SLAM3's Map): which keyframes and points are in it, and its state. Sets are by id
-// (ORB-SLAM3's by pointer), so GetAllKeyFrames / GetAllMapPoints come out by id.
-#include <set>
+// One map of the atlas (ORB-SLAM3's Map): which keyframes are in it, how many points, and its state. Sets are by
+// id (ORB-SLAM3's by pointer), so GetAllKeyFrames comes out by id. It is an atlas tile
+// (types/map/docs/DESIGN.md): its points are not listed here, as that list would be copied on every point added;
+// GetAllMapPoints is mapPoints (atlas_ops.hpp), from the points' own MapPoint::map and in_map.
+#include <cstddef>
 #include <vector>
 
+#include "types/map/flat.hpp"
 #include "types/map/ids.hpp"
 
 namespace map {
 
 struct Map {
     MapId id = kNone;
-    std::set<KeyFrameId> keyframes;
-    std::set<MapPointId> points;
+    FlatSet<KeyFrameId> keyframes;
+    std::size_t n_points = 0;  // MapPoint::in_map ones (MapPointsInMap)
     std::vector<KeyFrameId> keyframe_origins;  // mvpKeyFrameOrigins
     std::vector<MapPointId> reference_points;   // mvpReferenceMapPoints (drawn only)
 

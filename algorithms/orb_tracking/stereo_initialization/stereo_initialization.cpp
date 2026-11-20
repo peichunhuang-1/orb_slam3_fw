@@ -50,8 +50,8 @@ fw::bt::Status stereo_initialization(fw::InOut<State>& state, fw::Write<map::Atl
     t.last_keyframe_frame_id = f.id;
     t.last_keyframe = kf;
     t.local_keyframes.push_back(kf);
-    map::Map& m = a.currentMap();
-    t.local_points.assign(m.points.begin(), m.points.end());  // GetAllMapPoints
+    t.local_points = map::mapPoints(a, a.current);  // GetAllMapPoints
+    map::Map& m = a.editCurrentMap();
     t.reference_kf = kf;
     f.reference_kf = kf;
     m.reference_points = t.local_points;

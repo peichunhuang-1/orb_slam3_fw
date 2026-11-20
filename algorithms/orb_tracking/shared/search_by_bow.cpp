@@ -11,16 +11,16 @@ constexpr int kThLow = 50;  // ORBmatcher::TH_LOW
 
 int searchByBoW(const map::KeyFrame& kf, const map::Atlas& atlas, const tracking::Frame& frame, float nn_ratio,
                 bool check_orientation, std::vector<map::MapPointId>& matches) {
-    const orb::FrameFeatures& fk = *kf.features;
+    const orb::FrameFeatures& fk = *kf.data->features;
     const orb::FrameFeatures& ff = *frame.features;
     const unsigned n_left_f = unsigned(ff.n_left);
     matches.assign(std::size_t(frame.size()), map::kNone);
     int nmatches = 0;
     RotationHistogram hist;
 
-    auto kf_it = kf.feat.begin();
+    auto kf_it = kf.data->feat.begin();
     auto f_it = frame.feat.begin();
-    const auto kf_end = kf.feat.end();
+    const auto kf_end = kf.data->feat.end();
     const auto f_end = frame.feat.end();
     while (kf_it != kf_end && f_it != f_end) {
         if (kf_it->first == f_it->first) {
@@ -69,7 +69,7 @@ int searchByBoW(const map::KeyFrame& kf, const map::Atlas& atlas, const tracking
             ++kf_it;
             ++f_it;
         } else if (kf_it->first < f_it->first) {
-            kf_it = kf.feat.lower_bound(f_it->first);
+            kf_it = kf.data->feat.lower_bound(f_it->first);
         } else {
             f_it = frame.feat.lower_bound(kf_it->first);
         }

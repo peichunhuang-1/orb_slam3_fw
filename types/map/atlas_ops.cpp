@@ -30,13 +30,25 @@ bool sameCamera(const camera::KannalaBrandt8& a, const camera::KannalaBrandt8& b
     return a.width() == b.width() && a.height() == b.height();
 }
 
+// Map::EraseMapPoint
+void leaveMap(Atlas& a, MapPoint& p) {
+    if (!p.in_map) return;
+    p.in_map = false;
+    if (Map* m = a.editMap(p.map)) --m->n_points;
+}
+
 }  // namespace
 
 // ---- Atlas
 
-Map& Atlas::currentMap() {
+const Map& Atlas::currentMap() {
     if (!hasCurrentMap()) createNewMap(*this);
-    return maps.at(current);
+    return *findMap(current);
+}
+
+Map& Atlas::editCurrentMap() {
+    currentMap();
+    return *editMap(current);
 }
 
 const Map& Atlas::currentMap() const {
@@ -45,10 +57,11 @@ const Map& Atlas::currentMap() const {
     return *m;
 }
 
+
 // ---- maps
 
 MapId createNewMap(Atlas& a) {
-    if (Map* cur = a.findMap(a.current)) {
+    if (Map* cur = a.editMap(a.current)) {
         if (!a.maps.empty() && a.last_init_kf_id < cur->max_kf_id) a.last_init_kf_id = cur->max_kf_id + 1;
         cur->in_use = false;  // SetStoredMap
     }
@@ -58,16 +71,17 @@ MapId createNewMap(Atlas& a) {
     m.max_kf_id = a.last_init_kf_id;
     m.in_use = true;  // SetCurrentMap
     a.current = m.id;
-    a.maps.emplace(m.id, std::move(m));
+    a.maps.edit(m.id).set(std::move(m));
     return a.current;
 }
 
 void clearMap(Atlas& a, MapId id) {
-    Map* m = a.findMap(id);
+    Map* m = a.editMap(id);
     if (!m) return;
     for (KeyFrameId k : m->keyframes)
-        if (KeyFrame* kf = a.keyframe(k)) kf->map = kNone;  // UpdateMap(NULL)
-    m->points.clear();
+        if (KeyFrame* kf = a.editKeyFrame(k)) kf->map = kNone;  // UpdateMap(NULL)
+    for (MapPointId p : mapPoints(a, id)) a.editPoint(p)->in_map = false;
+    m->n_points = 0;
     m->keyframes.clear();
     m->max_kf_id = m->init_kf_id;
     m->imu_initialized = false;
@@ -75,6 +89,15 @@ void clearMap(Atlas& a, MapId id) {
     m->keyframe_origins.clear();
     m->imu_ba1 = false;
     m->imu_ba2 = false;
+}
+
+std::vector<MapPointId> mapPoints(const Atlas& a, MapId m) {
+    std::vector<MapPointId> v;
+    a.points.for_each([&](MapPointId id, const MapPoint& p) {
+        if (p.in_map && p.map == m) v.push_back(id);
+    });
+    std::sort(v.begin(), v.end());
+    return v;
 }
 
 void eraseMapFromBowIndex(Atlas& a, MapId m) {
@@ -86,41 +109,44 @@ void eraseMapFromBowIndex(Atlas& a, MapId m) {
 
 void clearAtlas(Atlas& a) {
     a.bow_index.clear();
-    a.maps.clear();
+    a.maps = {};
     a.current = kNone;
     a.last_init_kf_id = 0;
-    a.keyframes.clear();  // KeyFrame::nNextId = 0
-    a.points.clear();
+    a.keyframes = {};
+    a.next_keyframe_id = 0;  // KeyFrame::nNextId = 0
+    a.points = {};
+    a.next_point_id = 0;
 }
 
 int addRig(Atlas& a, const camera::StereoRig& rig) {
-    for (std::size_t i = 0; i < a.rigs.size(); ++i) {
-        const camera::StereoRig& r = a.rigs[i];
+    for (int i = 0; i < a.n_rigs; ++i) {
+        const camera::StereoRig& r = a.rig(i);
         if (sameCamera(r.camera(0), rig.camera(0)) && sameCamera(r.camera(1), rig.camera(1)) &&
             r.R_12() == rig.R_12() && r.t_12() == rig.t_12())
-            return int(i);
+            return i;
     }
-    a.rigs.push_back(rig);
-    return int(a.rigs.size() - 1);
+    a.rigs.edit(a.n_rigs).set(rig);
+    return a.n_rigs++;
 }
 
 // ---- keyframes
 
 KeyFrameId createKeyFrame(Atlas& a, KeyFrame kf) {
     const Map& m = a.currentMap();
-    kf.id = KeyFrameId(a.keyframes.size());
+    kf.id = a.next_keyframe_id++;
     kf.map = m.id;
     kf.origin_map = m.id;
     kf.imu = m.imu_initialized;
     if (kf.points.size() != std::size_t(kf.size())) kf.points.assign(std::size_t(kf.size()), kNone);
-    a.keyframes.push_back(std::make_unique<KeyFrame>(std::move(kf)));
-    return a.keyframes.back()->id;
+    const KeyFrameId id = kf.id;
+    a.keyframes.edit(id).set(std::move(kf));
+    return id;
 }
 
 void insertKeyFrame(Atlas& a, KeyFrameId k) {
-    KeyFrame* kf = a.keyframe(k);
+    const KeyFrame* kf = a.keyframe(k);
     if (!kf) return;
-    Map* m = a.findMap(kf->map);
+    Map* m = a.editMap(kf->map);
     if (!m) return;
     if (m->keyframes.empty()) {
         m->init_kf_id = k;
@@ -133,33 +159,36 @@ void insertKeyFrame(Atlas& a, KeyFrameId k) {
 }
 
 void computeBoW(KeyFrame& kf, const Vocabulary& voc) {
-    if (!kf.bow.empty() && !kf.feat.empty()) return;
+    if (!kf.data->bow.empty() && !kf.data->feat.empty()) return;
+    auto d = std::make_shared<KeyFrameData>(*kf.data);  // shared with other versions: a new one
     cv::Mat all;  // mDescriptors: left then right
-    cv::vconcat(kf.features->stereo->descriptors[0], kf.features->stereo->descriptors[1], all);
-    voc.transform(all, kf.bow, kf.feat, 4);
+    cv::vconcat(d->features->stereo->descriptors[0], d->features->stereo->descriptors[1], all);
+    voc.transform(all, d->bow, d->feat, 4);
+    kf.data = std::move(d);
 }
 
 void addToBowIndex(Atlas& a, KeyFrameId k) {
-    if (const KeyFrame* kf = a.keyframe(k)) a.bow_index.add(k, kf->bow);
+    if (const KeyFrame* kf = a.keyframe(k)) a.bow_index.add(k, kf->data->bow);
 }
 
 void addConnection(Atlas& a, KeyFrameId k, KeyFrameId other, int weight) {
-    KeyFrame* kf = a.keyframe(k);
-    if (!kf) return;
-    const auto it = kf->connected.find(other);
-    if (it != kf->connected.end() && it->second == weight) return;
-    kf->connected[other] = weight;
+    const KeyFrame* old = a.keyframe(k);
+    if (!old) return;
+    const auto it = old->connected.find(other);
+    if (it != old->connected.end() && it->second == weight) return;
+    a.editKeyFrame(k)->connected[other] = weight;
     updateBestCovisibles(a, k);
 }
 
 void eraseConnection(Atlas& a, KeyFrameId k, KeyFrameId other) {
-    KeyFrame* kf = a.keyframe(k);
-    if (!kf || !kf->connected.erase(other)) return;
+    const KeyFrame* old = a.keyframe(k);
+    if (!old || !old->connected.count(other)) return;
+    a.editKeyFrame(k)->connected.erase(other);
     updateBestCovisibles(a, k);
 }
 
 void updateBestCovisibles(Atlas& a, KeyFrameId k) {
-    KeyFrame* kf = a.keyframe(k);
+    KeyFrame* kf = a.editKeyFrame(k);
     if (!kf) return;
     std::vector<std::pair<int, KeyFrameId>> pairs;
     pairs.reserve(kf->connected.size());
@@ -169,7 +198,7 @@ void updateBestCovisibles(Atlas& a, KeyFrameId k) {
 }
 
 void updateConnections(Atlas& a, KeyFrameId k) {
-    KeyFrame* kf = a.keyframe(k);
+    const KeyFrame* kf = a.keyframe(k);
     if (!kf) return;
     std::map<KeyFrameId, int> counter;
     for (MapPointId pid : kf->points) {
@@ -202,13 +231,14 @@ void updateConnections(Atlas& a, KeyFrameId k) {
         pairs.emplace_back(nmax, kfmax);
         addConnection(a, kfmax, k, nmax);
     }
-    kf->connected = counter;
-    sortedDescending(std::move(pairs), kf->ordered_connected, kf->ordered_weights);
-    const Map* m = a.findMap(kf->map);
-    if (kf->first_connection && m && k != m->init_kf_id) {
-        kf->parent = kf->ordered_connected.front();
-        if (KeyFrame* parent = a.keyframe(kf->parent)) parent->children.insert(k);
-        kf->first_connection = false;
+    KeyFrame* kfe = a.editKeyFrame(k);
+    kfe->connected = FlatMap<KeyFrameId, int>(counter.begin(), counter.end());
+    sortedDescending(std::move(pairs), kfe->ordered_connected, kfe->ordered_weights);
+    const Map* m = a.findMap(kfe->map);
+    if (kfe->first_connection && m && k != m->init_kf_id) {
+        kfe->parent = kfe->ordered_connected.front();
+        if (KeyFrame* parent = a.editKeyFrame(kfe->parent)) parent->children.insert(k);
+        kfe->first_connection = false;
     }
 }
 
@@ -224,24 +254,24 @@ std::vector<KeyFrameId> covisiblesByWeight(const KeyFrame& kf, int w) {
 
 void changeParent(Atlas& a, KeyFrameId k, KeyFrameId parent) {
     if (k == parent) throw std::invalid_argument("map::changeParent: the parent and child can not be the same");
-    KeyFrame* kf = a.keyframe(k);
+    KeyFrame* kf = a.editKeyFrame(k);
     if (!kf) return;
     kf->parent = parent;
-    if (KeyFrame* p = a.keyframe(parent)) p->children.insert(k);
+    if (KeyFrame* p = a.editKeyFrame(parent)) p->children.insert(k);
 }
 
 void setKeyFrameBad(Atlas& a, KeyFrameId k) {
-    KeyFrame* kf = a.keyframe(k);
+    KeyFrame* kf = a.editKeyFrame(k);
     if (!kf) return;
-    Map* m = a.findMap(kf->map);
-    if (m && k == m->init_kf_id) return;
+    const MapId map_id = kf->map;
+    if (const Map* m = a.findMap(map_id); m && k == m->init_kf_id) return;
     if (kf->not_erase) {
         kf->to_be_erased = true;
         return;
     }
-    const std::map<KeyFrameId, int> connected = kf->connected;
+    const FlatMap<KeyFrameId, int> connected = kf->connected;
     for (const auto& c : connected) eraseConnection(a, c.first, k);
-    for (MapPointId pid : kf->points)
+    for (MapPointId pid : std::vector<MapPointId>(kf->points))  // eraseObservation may change kf->points
         if (a.point(pid)) eraseObservation(a, pid, k);
 
     kf->connected.clear();
@@ -275,14 +305,14 @@ void setKeyFrameBad(Atlas& a, KeyFrameId k) {
     }
     // The ones left (no covisibility with a candidate) go to the parent
     if (!kf->children.empty() && kf->parent != kNone)
-        for (KeyFrameId c : std::set<KeyFrameId>(kf->children)) changeParent(a, c, kf->parent);
-    if (KeyFrame* p = a.keyframe(kf->parent)) {
+        for (KeyFrameId c : FlatSet<KeyFrameId>(kf->children)) changeParent(a, c, kf->parent);
+    if (KeyFrame* p = a.editKeyFrame(kf->parent)) {
         p->children.erase(k);
         kf->Tcp = kf->pose() * p->poseInverse();
     }
     kf->bad = true;
 
-    if (m) {  // Map::EraseKeyFrame
+    if (Map* m = a.editMap(map_id)) {  // Map::EraseKeyFrame
         m->keyframes.erase(k);
         if (!m->keyframes.empty()) {
             if (k == m->lower_kf) m->lower_kf = *m->keyframes.begin();
@@ -290,7 +320,7 @@ void setKeyFrameBad(Atlas& a, KeyFrameId k) {
             m->lower_kf = kNone;
         }
     }
-    a.bow_index.erase(k, kf->bow);
+    a.bow_index.erase(k, kf->data->bow);
 }
 
 int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs) {
@@ -309,28 +339,32 @@ int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs) {
 MapPointId createMapPoint(Atlas& a, const Eigen::Vector3f& pos, KeyFrameId ref) {
     const KeyFrame* kf = a.keyframe(ref);
     if (!kf) throw std::invalid_argument("map::createMapPoint: no reference keyframe");
-    auto p = std::make_unique<MapPoint>();
-    p->id = MapPointId(a.points.size());
-    p->map = kf->map;
-    p->origin_map = kf->map;
-    p->first_kf = ref;
-    p->first_frame = kf->frame_id;
-    p->ref_kf = ref;
-    p->pos = pos;
-    a.points.push_back(std::move(p));
-    return a.points.back()->id;
+    MapPoint p;
+    p.id = a.next_point_id++;
+    p.map = kf->map;
+    p.origin_map = kf->map;
+    p.first_kf = ref;
+    p.first_frame = kf->data->frame_id;
+    p.ref_kf = ref;
+    p.pos = pos;
+    const MapPointId id = p.id;
+    a.points.edit(id).set(std::move(p));
+    return id;
 }
 
 void insertMapPoint(Atlas& a, MapPointId pid) {
     const MapPoint* p = a.point(pid);
-    if (!p) return;
-    if (Map* m = a.findMap(p->map)) m->points.insert(pid);
+    if (!p || p->in_map) return;
+    if (Map* m = a.editMap(p->map)) {
+        ++m->n_points;
+        a.editPoint(pid)->in_map = true;
+    }
 }
 
 void addObservation(Atlas& a, MapPointId pid, KeyFrameId k, int index) {
-    MapPoint* p = a.point(pid);
     const KeyFrame* kf = a.keyframe(k);
-    if (!p || !kf) return;
+    MapPoint* p = kf ? a.editPoint(pid) : nullptr;
+    if (!p) return;
     Observation& o = p->observations[k];  // (-1, -1) if new
     if (index >= kf->nLeft())
         o.right = index;
@@ -340,10 +374,10 @@ void addObservation(Atlas& a, MapPointId pid, KeyFrameId k, int index) {
 }
 
 void eraseObservation(Atlas& a, MapPointId pid, KeyFrameId k) {
-    MapPoint* p = a.point(pid);
-    if (!p) return;
+    const MapPoint* old = a.point(pid);
+    if (!old || !old->observations.count(k)) return;
+    MapPoint* p = a.editPoint(pid);
     const auto it = p->observations.find(k);
-    if (it == p->observations.end()) return;
     if (it->second.left != -1) --p->n_obs;
     if (it->second.right != -1) --p->n_obs;
     p->observations.erase(it);
@@ -352,32 +386,32 @@ void eraseObservation(Atlas& a, MapPointId pid, KeyFrameId k) {
 }
 
 void setPointBad(Atlas& a, MapPointId pid) {
-    MapPoint* p = a.point(pid);
+    MapPoint* p = a.editPoint(pid);
     if (!p) return;
     p->bad = true;
-    const std::map<KeyFrameId, Observation> obs = std::move(p->observations);
+    const FlatMap<KeyFrameId, Observation> obs = std::move(p->observations);
     p->observations.clear();
     for (const auto& o : obs) {
-        KeyFrame* kf = a.keyframe(o.first);
+        KeyFrame* kf = a.editKeyFrame(o.first);
         if (!kf) continue;
         if (o.second.left != -1) kf->points[std::size_t(o.second.left)] = kNone;
         if (o.second.right != -1) kf->points[std::size_t(o.second.right)] = kNone;
     }
-    if (Map* m = a.findMap(p->map)) m->points.erase(pid);
+    leaveMap(a, *p);
 }
 
 void replace(Atlas& a, MapPointId pid, MapPointId by) {
     if (pid == by) return;
-    MapPoint* p = a.point(pid);
-    MapPoint* q = a.point(by);
-    if (!p || !q) return;
-    const std::map<KeyFrameId, Observation> obs = std::move(p->observations);
+    if (!a.point(pid) || !a.point(by)) return;
+    MapPoint* p = a.editPoint(pid);
+    MapPoint* q = a.editPoint(by);
+    const FlatMap<KeyFrameId, Observation> obs = std::move(p->observations);
     p->observations.clear();
     p->bad = true;
     const int visible = p->visible, found = p->found;
     p->replaced = by;
     for (const auto& o : obs) {
-        KeyFrame* kf = a.keyframe(o.first);
+        KeyFrame* kf = a.editKeyFrame(o.first);
         if (!kf) continue;
         if (!q->inKeyFrame(o.first)) {
             if (o.second.left != -1) {
@@ -396,19 +430,19 @@ void replace(Atlas& a, MapPointId pid, MapPointId by) {
     q->found += found;
     q->visible += visible;
     computeDistinctiveDescriptors(a, by);
-    if (Map* m = a.findMap(p->map)) m->points.erase(pid);
+    leaveMap(a, *p);
 }
 
 void computeDistinctiveDescriptors(Atlas& a, MapPointId pid) {
-    MapPoint* p = a.point(pid);
+    const MapPoint* p = a.point(pid);
     if (!p || p->bad || p->observations.empty()) return;
     std::vector<const std::uint8_t*> d;
     d.reserve(p->observations.size() * 2);
     for (const auto& o : p->observations) {
         const KeyFrame* kf = a.goodKeyFrame(o.first);
         if (!kf) continue;
-        if (o.second.left != -1) d.push_back(kf->features->descriptor(o.second.left));
-        if (o.second.right != -1) d.push_back(kf->features->descriptor(o.second.right));
+        if (o.second.left != -1) d.push_back(kf->data->features->descriptor(o.second.left));
+        if (o.second.right != -1) d.push_back(kf->data->features->descriptor(o.second.right));
     }
     if (d.empty()) return;
     const std::size_t n = d.size();
@@ -428,11 +462,11 @@ void computeDistinctiveDescriptors(Atlas& a, MapPointId pid) {
             best = i;
         }
     }
-    std::copy(d[best], d[best] + 32, p->descriptor.begin());
+    std::copy(d[best], d[best] + 32, a.editPoint(pid)->descriptor.begin());
 }
 
 void updateNormalAndDepth(Atlas& a, MapPointId pid) {
-    MapPoint* p = a.point(pid);
+    const MapPoint* p = a.point(pid);
     if (!p || p->bad || p->observations.empty()) return;
     const KeyFrame* ref = a.keyframe(p->ref_kf);
     if (!ref) return;
@@ -456,17 +490,19 @@ void updateNormalAndDepth(Atlas& a, MapPointId pid) {
     const Observation o = p->indexIn(p->ref_kf);
     const int index = o.left != -1 ? o.left : o.right;
     if (index < 0) return;  // the reference keyframe does not see it (ORB-SLAM3 reads out of bounds)
-    const int level = ref->features->keypoint(index).octave;
-    p->max_distance = dist * ref->features->scale_factors[std::size_t(level)];
-    p->min_distance = p->max_distance / ref->features->scale_factors[std::size_t(ref->features->levels - 1)];
-    p->normal = normal / float(n);
+    const orb::FrameFeatures& ff = *ref->data->features;
+    const int level = ff.keypoint(index).octave;
+    MapPoint* pe = a.editPoint(pid);
+    pe->max_distance = dist * ff.scale_factors[std::size_t(level)];
+    pe->min_distance = pe->max_distance / ff.scale_factors[std::size_t(ff.levels - 1)];
+    pe->normal = normal / float(n);
 }
 
 MapPointId createStereoPoint(Atlas& a, KeyFrameId k, int i, const Eigen::Vector3f& pos) {
     const MapPointId pid = createMapPoint(a, pos, k);
-    KeyFrame* kf = a.keyframe(k);
+    KeyFrame* kf = a.editKeyFrame(k);
     addObservation(a, pid, k, i);
-    const int r = kf->features->rightOf(i);
+    const int r = kf->data->features->rightOf(i);
     if (r >= 0) {
         const int ri = kf->nLeft() + r;
         addObservation(a, pid, k, ri);

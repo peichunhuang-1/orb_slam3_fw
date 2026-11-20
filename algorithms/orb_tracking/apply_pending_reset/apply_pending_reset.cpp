@@ -16,7 +16,7 @@ void resetAll(map::Atlas& a, tracking::Tracker& t, State& state, tracking::Mappe
     cmd.reset_all = true;
     map::clearAtlas(a);  // and the BoW index (KeyFrameDatabase::clear), keyframe ids from 0
     map::createNewMap(a);
-    if (t.inertial) a.currentMap().inertial = true;
+    if (t.inertial) a.editCurrentMap().inertial = true;
     t.initial_frame_id = 0;
     t.next_frame_id = 0;  // Frame::nNextId
     state = State::NO_IMAGES_YET;
@@ -47,10 +47,10 @@ void resetActiveMap(map::Atlas& a, tracking::Tracker& t, State& state, tracking:
     // The frames of the trajectory from mnInitialFrameId on are marked lost. As the original, the start index is
     // the smallest lowest keyframe id of the maps with keyframes (a keyframe id compared as a frame index).
     long index = t.first_frame_id;
-    for (const auto& [id, map] : a.maps) {
-        if (map.keyframes.empty() || map.lower_kf == map::kNone) continue;
+    a.maps.for_each([&index](map::MapId, const map::Map& map) {
+        if (map.keyframes.empty() || map.lower_kf == map::kNone) return;
         if (index > long(map.lower_kf)) index = long(map.lower_kf);
-    }
+    });
     for (std::size_t k = 0; k < t.lost.size(); ++k, ++index)
         if (index >= t.initial_frame_id) t.lost[k] = true;
 

@@ -42,7 +42,7 @@ fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> m
     // The last frame's state from its keyframe and preintegration
     const map::KeyFrame* lkf = a.keyframe(t.last.last_keyframe);
     if (!t.last.valid() || !lkf) return fw::bt::Status::SUCCESS;
-    if (t.last.id == lkf->frame_id) {
+    if (t.last.id == lkf->data->frame_id) {
         t.last.setImuPoseVelocity(lkf->imuRotation(), lkf->imuPosition(), lkf->velocity());
     } else if (t.last.preintegrated) {
         const imu::Preintegrated& p = *t.last.preintegrated;

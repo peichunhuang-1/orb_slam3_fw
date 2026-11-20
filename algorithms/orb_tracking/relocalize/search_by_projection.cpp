@@ -43,7 +43,7 @@ int searchByProjection(tracking::Frame& f, const map::KeyFrame& kf, const map::A
         if (best_dist <= orb_dist) {
             f.points[std::size_t(best)] = p->id;
             ++nmatches;
-            hist.add(kf.features->keypoint(i).angle, ff.keypoint(best).angle, best);
+            hist.add(kf.data->features->keypoint(i).angle, ff.keypoint(best).angle, best);
         }
     }
 

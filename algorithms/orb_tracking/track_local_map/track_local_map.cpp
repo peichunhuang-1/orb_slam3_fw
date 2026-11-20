@@ -63,10 +63,10 @@ fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::
     t.matches_inliers = 0;
     for (std::size_t i = 0; i < f.points.size(); ++i) {
         if (f.points[i] == map::kNone) continue;
-        map::MapPoint* p = a.point(f.points[i]);
+        const map::MapPoint* p = a.point(f.points[i]);
         if (!f.outlier[i]) {
             if (p) {
-                ++p->found;
+                ++a.editPoint(f.points[i])->found;
                 if (p->n_obs > 0) ++t.matches_inliers;
             }
         } else if (!t.inertial) {

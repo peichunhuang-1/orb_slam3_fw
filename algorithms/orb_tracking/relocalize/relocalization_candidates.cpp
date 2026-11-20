@@ -34,7 +34,7 @@ std::vector<map::KeyFrameId> relocalizationCandidates(const map::Atlas& a, track
     for (map::KeyFrameId k : sharing) {
         tracking::RelocScratch& s = relocScratch(t, k);
         if (s.words > min_common) {
-            const float si = float(map::Vocabulary::score(f.bow, a.keyframe(k)->bow));
+            const float si = float(map::Vocabulary::score(f.bow, a.keyframe(k)->data->bow));
             s.score = si;
             scored.emplace_back(si, k);
         }

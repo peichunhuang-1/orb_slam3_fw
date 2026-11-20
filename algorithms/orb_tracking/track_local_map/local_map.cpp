@@ -261,7 +261,7 @@ int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool
 }  // namespace
 
 void updateLocalMap(map::Atlas& a, tracking::Tracker& t) {
-    if (map::Map* m = a.findMap(a.current)) m->reference_points = t.local_points;  // for drawing
+    if (map::Map* m = a.editMap(a.current)) m->reference_points = t.local_points;  // for drawing
     updateLocalKeyFrames(a, t);
     updateLocalPoints(a, t);
 }
@@ -271,12 +271,12 @@ void searchLocalPoints(map::Atlas& a, tracking::Tracker& t, tracking::State stat
     // The frame's points are not searched again
     for (map::MapPointId& id : f.points) {
         if (id == map::kNone) continue;
-        map::MapPoint* p = a.point(id);
+        const map::MapPoint* p = a.point(id);
         if (!p || p->bad) {
             id = map::kNone;
             continue;
         }
-        ++p->visible;
+        ++a.editPoint(id)->visible;
         tracking::PointScratch& s = pointScratch(t, id);
         s.last_frame_seen = f.id;
         s.in_view = false;
@@ -289,10 +289,10 @@ void searchLocalPoints(map::Atlas& a, tracking::Tracker& t, tracking::State stat
     for (map::MapPointId id : t.local_points) {
         tracking::PointScratch& s = pointScratch(t, id);
         if (s.last_frame_seen == f.id) continue;
-        map::MapPoint* p = a.point(id);
+        const map::MapPoint* p = a.point(id);
         if (!p || p->bad) continue;
         if (isInFrustum(f, rig, *p, 0.5f, s)) {
-            ++p->visible;
+            ++a.editPoint(id)->visible;
             ++to_match;
         }
     }

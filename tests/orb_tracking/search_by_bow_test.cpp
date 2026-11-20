@@ -56,18 +56,20 @@ std::shared_ptr<const orb::FrameFeatures> features(const View& left, const View&
 }
 
 map::MapPointId addPoint(map::Atlas& a, bool bad = false) {
-    auto p = std::make_unique<map::MapPoint>();
-    p->id = a.points.size();
-    p->bad = bad;
-    a.points.push_back(std::move(p));
-    return a.points.back()->id;
+    map::MapPoint p;
+    p.id = a.next_point_id++;
+    p.bad = bad;
+    a.points.edit(p.id).set(p);
+    return p.id;
 }
 
 void testMatching() {
     map::Atlas atlas;
     // Keyframe: 4 left features, 1 right (index 4)
     map::KeyFrame kf;
-    kf.features = features({{0, 100, 200, 30}, {0, 0, 0, 0}}, {{60}, {0}});
+    auto d = std::make_shared<map::KeyFrameData>();  // changed in place below: the test's own
+    kf.data = d;
+    d->features = features({{0, 100, 200, 30}, {0, 0, 0, 0}}, {{60}, {0}});
     const map::MapPointId p0 = addPoint(atlas), p1 = addPoint(atlas), p2 = addPoint(atlas), p3 = addPoint(atlas, true),
                           p4 = addPoint(atlas);
     kf.points = {p0, p1, p2, p3, p4};
@@ -77,7 +79,7 @@ void testMatching() {
     f.points.assign(8, map::kNone);
     f.outlier.assign(8, false);
     // Nodes: the keyframe in 1, 3, 5, 9; the frame in 2, 3, 5, 7, 9
-    kf.feat = {{1, {3}}, {3, {0}}, {5, {1, 2}}, {9, {4}}};
+    d->feat = {{1, {3}}, {3, {0}}, {5, {1, 2}}, {9, {4}}};
     f.feat = {{2, {4}}, {3, {0, 1, 5}}, {5, {2, 3, 6, 7}}, {7, {4}}, {9, {1}}};
 
     std::vector<map::MapPointId> m;
@@ -93,13 +95,13 @@ void testMatching() {
 
     // Ratio fails on the left (2 vs 2 with ratio 0.7): the left stays unmatched, the right is still matched
     f.feat = {{3, {0, 1, 5}}};
-    kf.feat = {{3, {0}}};
+    d->feat = {{3, {0}}};
     f.features = features({{2, 2, 0, 0, 0}, {0, 0, 0, 0, 0}}, {{40, 0, 0}, {0, 0, 0}});
     const int n2 = orb_tracking::searchByBoW(kf, atlas, f, 0.7f, false, m);
     check(n2 == 1 && m[0] == map::kNone && m[1] == map::kNone && m[5] == p0, "left ratio fails, right kept");
 
     // Bad point: no match
-    kf.feat = {{1, {3}}};
+    d->feat = {{1, {3}}};
     f.feat = {{1, {0}}};
     check(orb_tracking::searchByBoW(kf, atlas, f, 0.7f, false, m) == 0, "bad point skipped");
 }

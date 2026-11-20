@@ -18,6 +18,7 @@ namespace map {
 // ---- maps
 MapId createNewMap(Atlas& a);                     // CreateNewMap: the current map is stored, a new one is current
 void clearMap(Atlas& a, MapId m);                 // Map::clear: its keyframes leave it (map = kNone), sets emptied
+std::vector<MapPointId> mapPoints(const Atlas& a, MapId m);  // GetAllMapPoints, by id (goes over every point)
 void eraseMapFromBowIndex(Atlas& a, MapId m);     // KeyFrameDatabase::clearMap (before clearMap)
 void clearAtlas(Atlas& a);                        // clearAtlas, KeyFrameDatabase::clear and the id restart of Reset
 // AddCamera for a stereo pair: the index of an equal rig (same intrinsics, size and extrinsics) or of the new one
@@ -28,7 +29,7 @@ int addRig(Atlas& a, const camera::StereoRig& rig);
 // initialized). It is not in the map until insertKeyFrame.
 KeyFrameId createKeyFrame(Atlas& a, KeyFrame kf);
 void insertKeyFrame(Atlas& a, KeyFrameId kf);     // Atlas::AddKeyFrame (Map::AddKeyFrame)
-void computeBoW(KeyFrame& kf, const Vocabulary& voc);  // if not done yet (levels up 4)
+void computeBoW(KeyFrame& kf, const Vocabulary& voc);  // if not done yet (levels up 4): a new kf.data
 void addToBowIndex(Atlas& a, KeyFrameId kf);      // KeyFrameDatabase::add
 void addConnection(Atlas& a, KeyFrameId kf, KeyFrameId other, int weight);
 void eraseConnection(Atlas& a, KeyFrameId kf, KeyFrameId other);

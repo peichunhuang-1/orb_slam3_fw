@@ -39,10 +39,10 @@ fw::bt::Status begin_frame(fw::InOut<State>& state, fw::Write<map::Atlas> atlas,
     }
     t.created_map = false;
 
-    map::Map& m = a.currentMap();
+    const map::Map& m = a.currentMap();
     t.map_updated = false;
     if (m.change_index > m.change_notified) {
-        m.change_notified = m.change_index;
+        a.editCurrentMap().change_notified = m.change_index;
         t.map_updated = true;
     }
     return fw::bt::Status::SUCCESS;

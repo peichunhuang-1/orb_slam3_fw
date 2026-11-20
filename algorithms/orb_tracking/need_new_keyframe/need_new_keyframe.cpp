@@ -17,7 +17,7 @@ bool needNewKeyFrame(const map::Atlas& a, const tracking::Tracker& t, const trac
                      fw::Optional<tracking::MapperCommand>& mapper_cmd) {
     const tracking::Frame& f = t.current;
     const map::KeyFrame* last_kf = a.keyframe(t.last_keyframe);
-    if (t.inertial && !imuInitialized(a)) return last_kf && f.timestamp - last_kf->timestamp >= 0.25;
+    if (t.inertial && !imuInitialized(a)) return last_kf && f.timestamp - last_kf->data->timestamp >= 0.25;
 
     if (mapper.stopped || mapper.stop_requested) return false;
 
@@ -46,7 +46,7 @@ bool needNewKeyFrame(const map::Atlas& a, const tracking::Tracker& t, const trac
     const bool c1b = f.id >= t.last_keyframe_frame_id + 0 && idle;  // mMinFrames = 0
     const bool c1c = !t.inertial && (inliers < ref_matches * 0.25 || insert_close);
     const bool c2 = (inliers < ref_matches * th_ref_ratio || insert_close) && inliers > 15;
-    const bool c3 = last_kf && t.inertial && f.timestamp - last_kf->timestamp >= 0.5;
+    const bool c3 = last_kf && t.inertial && f.timestamp - last_kf->data->timestamp >= 0.5;
 
     if (!(((c1a || c1b || c1c) && c2) || c3)) return false;
     if (idle || mapper.initializing) return true;

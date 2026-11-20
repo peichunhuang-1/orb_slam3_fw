@@ -93,7 +93,7 @@ ORB-SLAM3 在 tracking 的執行緒內做 `PreintegrateIMU`：從佇列取出上
 
 **鎖的範圍**：behavior block 每個 tick 取一次它用到的資源，整個 tick 持有 `atlas` 與 `tracker` 的寫入鎖，相當於 ORB-SLAM3 在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
 
-**以 id 引用，不用指標**：ORB-SLAM3 的物件以指標互相引用（`Frame::mvpMapPoints`、`KeyFrame` 的 covisibility、`MapPoint` 的觀測）。這裡一律改用 id：`tracker`、`Frame`、`KeyFrame`、`MapPoint` 之間只存 keyframe id 與 point id，使用時向 `atlas` 查。因此 `tracker` 不保留任何指向資源內部的指標，符合 fw 的一般規則；重設或刪除後查不到的 id 直接略過，與 ORB-SLAM3 的 `isBad()` 檢查同義。map point 存放在以 id 為索引的連續陣列（slot vector），查詢的成本接近直接用指標。其他 block 對 keyframe 的引用同樣用 id（`map/KeyFrameRef`）。
+**以 id 引用，不用指標**：ORB-SLAM3 的物件以指標互相引用（`Frame::mvpMapPoints`、`KeyFrame` 的 covisibility、`MapPoint` 的觀測）。這裡一律改用 id：`tracker`、`Frame`、`KeyFrame`、`MapPoint` 之間只存 keyframe id 與 point id，使用時向 `atlas` 查。因此 `tracker` 不保留任何指向資源內部的指標，符合 fw 的一般規則；重設或刪除後查不到的 id 直接略過，與 ORB-SLAM3 的 `isBad()` 檢查同義。keyframe 與 map point 存放在以 id 為鍵的 `fw::TiledMap`（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md)），每次查詢約 50 ns（5 萬點時）。其他 block 對 keyframe 的引用同樣用 id（`map/KeyFrameRef`）。
 
 **重設延後到下一個 tick**：ORB-SLAM3 的 `System::ResetActiveMap()` 只設定旗標，真正的 `Tracking::ResetActiveMap()` 在下一次 `TrackStereo` 的開頭執行。這裡照樣做：葉節點在 `tracker` 記下重設要求，根樹的第一個葉節點 `apply_pending_reset` 在下一個 tick 執行，同時送出 `mapper_cmd`。`CreateMapInAtlas()` 在 ORB-SLAM3 是立即執行的，這裡也立即執行。
 
@@ -261,7 +261,7 @@ types/
   orb/frame_features.hpp         Frame 與它產生的 keyframe 共用的特徵（不複製）、尺度層級            ~70
   imu/preintegrated.hpp/.cpp     積分、Jacobian 修正、串接、Reintegrate                           ~350
   map/ids.hpp keyframe.hpp map_point.hpp map.hpp atlas.hpp keyframe_ref.hpp
-                                 純資料，以 id 互相引用；keyframe 與 map point 用 slot vector        ~400
+                                 純資料，以 id 互相引用；keyframe 與 map point 用 TiledMap         ~400
   map/atlas_ops.hpp/.cpp         加觀測、covisibility、spanning tree、bad、Replace、法向與深度、
                                  代表描述子、建立 stereo 點                                         ~450
   map/bow_index.hpp/.cpp         keyframe 的 BoW 反向索引（只有索引）                              ~70
@@ -295,7 +295,7 @@ graphs/trees/tracking/*.tree.yaml
 ### 型別的實作細節
 
 - **順序以 id 取代指標**：ORB-SLAM3 有幾處以指標為鍵的容器，走訪順序就是指標位址的順序，例如 `MapPoint::mObservations`、`mConnectedKeyFrameWeights`、`Map` 的集合。這裡都改以 id 為鍵，結果因此是決定性的。順序會影響結果的地方有：代表描述子同分時取哪一個、covisibility 同權重時的先後、`UpdateConnections` 選哪個 keyframe 當 parent，以及 `GetAllMapPoints` 的順序。
-- **slot vector**：keyframe 與 map point 存在以 id 為索引的陣列。
+- **TiledMap**：keyframe 與 map point 存在以 id 為鍵的 `fw::TiledMap`，`std::map`、`std::set` 改用排序過的 vector（`types/map/flat.hpp`），走訪順序同樣依 id（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md)）。
   - 變成 bad 之後物件仍然保留，與 ORB-SLAM3 相同，因為 `GetReplaced` 與軌跡的 reference keyframe 還會用到。
   - `ResetActiveMap` 之後，該地圖的 keyframe 也保留，只是不再屬於任何地圖，同樣與原版一致。
   - 只有 `Reset`（`clearAtlas`）會清空陣列，keyframe 的 id 從 0 重新編號（原版 `KeyFrame::nNextId = 0`）。map point 的 id 也跟著從 0 重新編號；原版不重設，但沒有邏輯依賴它。

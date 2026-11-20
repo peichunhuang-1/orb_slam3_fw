@@ -272,7 +272,7 @@ int optimizePose(tracking::Frame& frame, const map::Atlas& atlas) {
     std::vector<const Eigen::Vector3f*> world(std::size_t(frame.size()), nullptr);
     for (std::size_t i = 0; i < world.size(); ++i)
         if (const map::MapPoint* p = atlas.point(frame.points[i])) world[i] = &p->pos;
-    return optimizePose(frame, atlas.rigs[std::size_t(frame.rig)], world);
+    return optimizePose(frame, atlas.rig(frame.rig), world);
 }
 
 }  // namespace orb_tracking

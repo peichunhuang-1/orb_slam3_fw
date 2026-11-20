@@ -61,7 +61,7 @@ fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoIm
 
     if (!t.has_calib || !sameCalib(t.calib, calib)) loadCalib(a, t, calib);
     t.th_depth = t.baseline * float(params.th_depth);
-    if (t.inertial) a.currentMap().inertial = true;  // SetInertialSensor
+    if (t.inertial) a.editCurrentMap().inertial = true;  // SetInertialSensor
     else a.currentMap();
 
     tracking::FrameSetup s;

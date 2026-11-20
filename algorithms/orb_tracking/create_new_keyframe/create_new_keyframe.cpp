@@ -23,12 +23,14 @@ fw::bt::Status create_new_keyframe(fw::Optional<const tracking::MapperStatus&> m
     if (m.initializing && !imuInitialized(a)) return fw::bt::Status::FAILURE;
     if (m.stopped) return fw::bt::Status::FAILURE;  // SetNotStop(true) fails
 
+    // SetNewBias of the new keyframe: its bias is the frame's (keyFrameOf), and the preintegration it shares with
+    // the frame gets it too, before the atlas holds it
+    if (f.preintegrated) f.preintegrated->setNewBias(f.bias);
     const map::KeyFrameId id = map::createKeyFrame(a, keyFrameOf(f));  // bImu: the map's IMU is initialized
-    map::KeyFrame& kf = *a.keyframe(id);
-    kf.setNewBias(f.bias);
+    map::KeyFrame& kf = *a.editKeyFrame(id);
     t.reference_kf = id;
     f.reference_kf = id;
-    if (map::KeyFrame* last = a.keyframe(t.last_keyframe)) {
+    if (map::KeyFrame* last = a.editKeyFrame(t.last_keyframe)) {
         kf.prev = last->id;
         last->next = id;
     }

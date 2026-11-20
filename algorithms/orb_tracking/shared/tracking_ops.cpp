@@ -34,7 +34,7 @@ void requestResetActiveMap(tracking::Tracker& t) {
 void createMapInAtlas(map::Atlas& a, tracking::Tracker& t, tracking::State& state) {
     t.last_init_frame_id = t.current.id;
     map::createNewMap(a);
-    if (t.inertial) a.currentMap().inertial = true;  // SetInertialSensor
+    if (t.inertial) a.editCurrentMap().inertial = true;  // SetInertialSensor
     t.initial_frame_id = t.current.id + 1;
     state = tracking::State::NO_IMAGES_YET;
     t.has_velocity = false;
@@ -132,25 +132,27 @@ std::vector<const Eigen::Vector3f*> worldPositions(const map::Atlas& a, const st
 }
 
 const camera::StereoRig& rigOf(const map::Atlas& a, const tracking::Frame& f) {
-    if (f.rig < 0 || std::size_t(f.rig) >= a.rigs.size()) throw std::logic_error("orb_tracking: the frame has no rig");
-    return a.rigs[std::size_t(f.rig)];
+    if (f.rig < 0 || f.rig >= a.n_rigs) throw std::logic_error("orb_tracking: the frame has no rig");
+    return a.rig(f.rig);
 }
 
 map::KeyFrame keyFrameOf(const tracking::Frame& f) {
+    auto d = std::make_shared<map::KeyFrameData>();
+    d->frame_id = f.id;
+    d->timestamp = f.timestamp;
+    d->features = f.features;
+    d->rig = f.rig;
+    d->Tlr = f.Tlr;
+    d->Trl = f.Trl;
+    d->baseline = f.baseline;
+    d->th_depth = f.th_depth;
+    d->bow = f.bow;
+    d->feat = f.feat;
+    d->has_imu_calib = f.has_imu_calib;
+    d->T_cb = f.T_cb;
     map::KeyFrame kf;
-    kf.frame_id = f.id;
-    kf.timestamp = f.timestamp;
-    kf.features = f.features;
-    kf.rig = f.rig;
-    kf.Tlr = f.Tlr;
-    kf.Trl = f.Trl;
-    kf.baseline = f.baseline;
-    kf.th_depth = f.th_depth;
-    kf.bow = f.bow;
-    kf.feat = f.feat;
+    kf.data = std::move(d);
     kf.points = f.points;
-    kf.has_imu_calib = f.has_imu_calib;
-    kf.T_cb = f.T_cb;
     kf.preintegrated = f.preintegrated;
     if (f.hasVelocity()) kf.setVelocity(f.velocity());
     kf.bias = f.bias;

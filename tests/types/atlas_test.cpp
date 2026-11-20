@@ -53,9 +53,11 @@ std::shared_ptr<const orb::FrameFeatures> features(int n_left, int n_stereo, int
 
 map::KeyFrameId keyframe(map::Atlas& a, const Eigen::Vector3f& centre, int n_left = 60) {
     map::KeyFrame kf;
-    kf.features = features(n_left, n_left / 2, 10);
-    kf.Tlr = geometry::SE3f(Eigen::Matrix3f::Identity(), Eigen::Vector3f(0.11f, 0, 0));
-    kf.Trl = kf.Tlr.inverse();
+    auto d = std::make_shared<map::KeyFrameData>();
+    d->features = features(n_left, n_left / 2, 10);
+    d->Tlr = geometry::SE3f(Eigen::Matrix3f::Identity(), Eigen::Vector3f(0.11f, 0, 0));
+    d->Trl = d->Tlr.inverse();
+    kf.data = std::move(d);
     kf.setPose(geometry::SE3f(Eigen::Matrix3f::Identity(), -centre));  // camera at centre, looking along z
     const map::KeyFrameId id = map::createKeyFrame(a, std::move(kf));
     map::insertKeyFrame(a, id);
@@ -67,7 +69,7 @@ map::MapPointId seenBy(map::Atlas& a, std::initializer_list<std::pair<map::KeyFr
     const map::MapPointId p = map::createMapPoint(a, Eigen::Vector3f(0, 0, 5), kfs.begin()->first);
     for (const auto& k : kfs) {
         map::addObservation(a, p, k.first, k.second);
-        a.keyframe(k.first)->points[std::size_t(k.second)] = p;
+        a.editKeyFrame(k.first)->points[std::size_t(k.second)] = p;
     }
     map::insertMapPoint(a, p);
     return p;
@@ -94,20 +96,23 @@ int main() {
           "stereo point observations");
     check(a.keyframe(k0)->points[3] == s && a.keyframe(k0)->points[std::size_t(n_left + 3)] == s,
           "stereo point in the keyframe");
-    check(std::equal(sp.descriptor.begin(), sp.descriptor.end(), a.keyframe(k0)->features->descriptor(3)) ||
-              std::equal(sp.descriptor.begin(), sp.descriptor.end(), a.keyframe(k0)->features->descriptor(n_left + 3)),
+    check(std::equal(sp.descriptor.begin(), sp.descriptor.end(), a.keyframe(k0)->data->features->descriptor(3)) ||
+              std::equal(sp.descriptor.begin(), sp.descriptor.end(), a.keyframe(k0)->data->features->descriptor(n_left + 3)),
           "stereo point descriptor is one of its own");
-    check(a.currentMap().points.count(s) == 1, "stereo point in the map");
+    {
+        const std::vector<map::MapPointId> in = map::mapPoints(a, a.current);
+        check(std::count(in.begin(), in.end(), s) == 1 && a.currentMap().n_points == in.size(), "stereo point in the map");
+    }
 
     // ---- normal and depth: left camera at the origin, right at (0.11, 0, 0)
     {
         const Eigen::Vector3f v0 = sp.pos.normalized(), v1 = (sp.pos - Eigen::Vector3f(0.11f, 0, 0)).normalized();
         const Eigen::Vector3f want = (v0 + v1) / 2.f;
-        const int level = a.keyframe(k0)->features->keypoint(3).octave;
-        const float max_d = sp.pos.norm() * a.keyframe(k0)->features->scale_factors[std::size_t(level)];
+        const int level = a.keyframe(k0)->data->features->keypoint(3).octave;
+        const float max_d = sp.pos.norm() * a.keyframe(k0)->data->features->scale_factors[std::size_t(level)];
         check((sp.normal - want).norm() < 1e-6f, "normal");
         check(std::fabs(sp.max_distance - max_d) < 1e-5f &&
-                  std::fabs(sp.min_distance - max_d / a.keyframe(k0)->features->scale_factors[7]) < 1e-5f,
+                  std::fabs(sp.min_distance - max_d / a.keyframe(k0)->data->features->scale_factors[7]) < 1e-5f,
               "scale invariance distances");
         check(sp.predictScale(sp.max_distance, std::log(1.2f), 8) == 0 &&
                   sp.predictScale(sp.max_distance / 1.2f / 1.2f, std::log(1.2f), 8) == 2 &&
@@ -148,11 +153,15 @@ int main() {
     const int k2_right = a.keyframe(k2)->nLeft() + 5;
     map::addObservation(a, p01[0], k2, 30);
     map::addObservation(a, p01[0], k2, k2_right);
-    a.keyframe(k2)->points[30] = p01[0];
-    a.keyframe(k2)->points[std::size_t(k2_right)] = p01[0];
+    a.editKeyFrame(k2)->points[30] = p01[0];
+    a.editKeyFrame(k2)->points[std::size_t(k2_right)] = p01[0];
 
     // ---- k1 goes bad: its points with 2 observations go bad too, k2 is re-parented to k0
-    a.keyframe(k1)->bow = {{5, 0.5}, {9, 0.5}};
+    {
+        auto d = std::make_shared<map::KeyFrameData>(*a.keyframe(k1)->data);
+        d->bow = {{5, 0.5}, {9, 0.5}};
+        a.editKeyFrame(k1)->data = std::move(d);
+    }
     map::addToBowIndex(a, k1);
     map::setKeyFrameBad(a, k1);
     check(kf1.bad && a.currentMap().keyframes.count(k1) == 0, "k1 bad and out of the map");
@@ -173,8 +182,8 @@ int main() {
     // ---- replace: p02[0] by p02[1]; both are in k0 and k2, so the old one's features are cleared
     {
         const map::MapPointId from = p02[0], to = p02[1];
-        a.point(from)->found = 4;
-        a.point(from)->visible = 6;
+        a.editPoint(from)->found = 4;
+        a.editPoint(from)->visible = 6;
         map::replace(a, from, to);
         check(a.point(from)->bad && a.point(from)->replaced == to, "replaced");
         check(a.keyframe(k0)->points[50] == map::kNone && a.keyframe(k2)->points[0] == map::kNone,
@@ -197,7 +206,7 @@ int main() {
         const map::MapPointId p = seenBy(a, {{k3, 1}, {k4, 1}, {k5, 1}});
         // the middle descriptor (k4's) is 8 bits from each of the others, which are 16 apart
         auto set = [&](map::KeyFrameId k, int bits) {
-            auto& d = const_cast<cv::Mat&>(a.keyframe(k)->features->stereo->descriptors[0]);
+            auto& d = const_cast<cv::Mat&>(a.keyframe(k)->data->features->stereo->descriptors[0]);
             d.row(1).setTo(0);
             for (int b = 0; b < bits; ++b) d.at<std::uint8_t>(1, b / 8) |= std::uint8_t(1 << (b % 8));
         };
@@ -218,8 +227,8 @@ int main() {
         for (int i = 0; i < 4; ++i) {
             std::vector<int> d;
             for (int j = 0; j < 4; ++j)
-                d.push_back(orb::hamming256(a.keyframe(ks[i])->features->descriptor(1),
-                                            a.keyframe(ks[j])->features->descriptor(1)));
+                d.push_back(orb::hamming256(a.keyframe(ks[i])->data->features->descriptor(1),
+                                            a.keyframe(ks[j])->data->features->descriptor(1)));
             std::sort(d.begin(), d.end());
             if (d[1] < best_median) {
                 best_median = d[1];
@@ -227,7 +236,7 @@ int main() {
             }
         }
         check(std::equal(a.point(p)->descriptor.begin(), a.point(p)->descriptor.end(),
-                         a.keyframe(ks[best])->features->descriptor(1)),
+                         a.keyframe(ks[best])->data->features->descriptor(1)),
               "descriptor: least median");
     }
 
@@ -235,7 +244,7 @@ int main() {
     {
         const map::KeyFrameId max_kf = a.currentMap().max_kf_id;
         const map::MapId m1 = map::createNewMap(a);
-        check(m1 == 1 && a.current == m1 && a.currentMap().init_kf_id == max_kf + 1 && !a.maps.at(m0).in_use,
+        check(m1 == 1 && a.current == m1 && a.currentMap().init_kf_id == max_kf + 1 && !a.findMap(m0)->in_use,
               "new map");
         const map::KeyFrameId k = keyframe(a, Eigen::Vector3f(0, 0, 0));
         check(a.keyframe(k)->map == m1 && a.currentMap().init_kf_id == k, "keyframe in the new map");
