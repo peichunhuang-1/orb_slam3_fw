@@ -76,9 +76,8 @@ int keyFrameCulling(map::Atlas& a, const local_mapping::LocalMapper& m) {
     const std::vector<map::KeyFrameId> local = cur->ordered_connected;
     const float redundant_th = m.inertial ? 0.5f : 0.9f;
 
-    const map::Map* cur_map = a.hasCurrentMap() ? &a.currentMap() : nullptr;
-    const bool init_imu = cur_map && cur_map->imu_initialized;
-    const std::size_t kfs_in_map = cur_map ? cur_map->keyframes.size() : 0;
+    const bool init_imu = a.imuInitialized();
+    const std::size_t kfs_in_map = std::size_t(a.keyFramesInMap());
     const map::Map* kf_map = a.findMap(cur->map);  // mpCurrentKeyFrame->GetMap()
     const bool ba2 = kf_map && kf_map->imu_ba2;
 

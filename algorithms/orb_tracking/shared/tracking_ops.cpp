@@ -8,21 +8,6 @@
 
 namespace orb_tracking {
 
-int keyFramesInMap(const map::Atlas& a) {
-    const map::Map* m = a.findMap(a.current);
-    return m ? int(m->keyframes.size()) : 0;
-}
-
-bool imuInitialized(const map::Atlas& a) {
-    const map::Map* m = a.findMap(a.current);
-    return m && m->imu_initialized;
-}
-
-bool inertialBA2(const map::Atlas& a) {
-    const map::Map* m = a.findMap(a.current);
-    return m && m->imu_ba2;
-}
-
 const tracking::MapperStatus& mapperOf(const fw::Optional<const tracking::MapperStatus&>& m) {
     static const tracking::MapperStatus idle;
     return m.has_value() ? *m : idle;

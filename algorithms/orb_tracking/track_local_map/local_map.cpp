@@ -18,7 +18,7 @@ void updateLocalKeyFrames(const map::Atlas& a, tracking::Tracker& t) {
     // Each point votes for the keyframes observing it (the current frame's points; with the IMU initialized and
     // no recent relocalization the last frame's, as the current one has no matches yet). Bad points leave.
     std::map<map::KeyFrameId, int> counter;
-    tracking::Frame& voter = (!imuInitialized(a) || f.id < t.last_reloc_frame_id + 2) ? f : t.last;
+    tracking::Frame& voter = (!a.imuInitialized() || f.id < t.last_reloc_frame_id + 2) ? f : t.last;
     for (map::MapPointId& id : voter.points) {
         if (id == map::kNone) continue;
         const map::MapPoint* p = a.point(id);
@@ -298,7 +298,7 @@ void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::Stat
     if (to_match == 0) return;
 
     int th = 1;
-    if (imuInitialized(a)) th = inertialBA2(a) ? 2 : 6;
+    if (a.imuInitialized()) th = a.inertialBA2() ? 2 : 6;
     else if (t.inertial) th = 10;
     if (f.id < t.last_reloc_frame_id + 2) th = 5;  // relocalized recently: coarser
     if (state == tracking::State::LOST || state == tracking::State::RECENTLY_LOST) th = 15;

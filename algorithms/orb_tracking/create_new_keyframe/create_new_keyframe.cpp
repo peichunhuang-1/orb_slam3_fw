@@ -20,7 +20,7 @@ fw::bt::Status create_new_keyframe(fw::Optional<const tracking::MapperStatus&> m
     const map::Atlas& a = t.view;
     tracking::Frame& f = t.current;
     const tracking::MapperStatus& m = mapperOf(mapper);
-    if (m.initializing && !imuInitialized(a)) return fw::bt::Status::FAILURE;
+    if (m.initializing && !a.imuInitialized()) return fw::bt::Status::FAILURE;
     if (m.stopped) return fw::bt::Status::FAILURE;  // SetNotStop(true) fails
     const std::uint64_t seq = t.next_edit_seq;
 

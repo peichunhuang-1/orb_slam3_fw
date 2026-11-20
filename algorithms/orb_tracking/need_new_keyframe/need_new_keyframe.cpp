@@ -17,11 +17,11 @@ bool needNewKeyFrame(const map::Atlas& a, const tracking::Tracker& t, const trac
                      fw::Optional<tracking::MapperCommand>& mapper_cmd) {
     const tracking::Frame& f = t.current;
     const map::KeyFrame* last_kf = a.keyframe(t.last_keyframe);
-    if (t.inertial && !imuInitialized(a)) return last_kf && f.timestamp - last_kf->data->timestamp >= 0.25;
+    if (t.inertial && !a.imuInitialized()) return last_kf && f.timestamp - last_kf->data->timestamp >= 0.25;
 
     if (mapper.stopped || mapper.stop_requested) return false;
 
-    const int nKFs = keyFramesInMap(a);
+    const int nKFs = a.keyFramesInMap();
     if (f.id < t.last_reloc_frame_id + t.max_frames && nKFs > t.max_frames) return false;
 
     const int min_obs = nKFs <= 2 ? 2 : 3;

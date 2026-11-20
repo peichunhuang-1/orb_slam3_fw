@@ -5,7 +5,7 @@
 namespace {
 
 fw::bt::Status predict_state_imu(fw::Write<tracking::Tracker> tracker) {
-    if (!orb_tracking::imuInitialized(tracker->view)) return fw::bt::Status::FAILURE;
+    if (!tracker->view.imuInitialized()) return fw::bt::Status::FAILURE;
     orb_tracking::predictStateImu(tracker->view, *tracker);
     return fw::bt::Status::SUCCESS;
 }

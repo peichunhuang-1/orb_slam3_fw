@@ -11,7 +11,7 @@ fw::bt::Status lost_after_pose_failure(fw::InOut<State>& state, fw::Write<tracki
     if (!state.has_value()) state.emplace(State::OK);
     if (t.current.id <= t.last_reloc_frame_id + t.frames_to_reset_imu && t.inertial) {
         *state = State::LOST;
-    } else if (orb_tracking::keyFramesInMap(tracker->view) > 10) {
+    } else if (tracker->view.keyFramesInMap() > 10) {
         *state = State::RECENTLY_LOST;
         t.timestamp_lost = t.current.timestamp;
     } else {

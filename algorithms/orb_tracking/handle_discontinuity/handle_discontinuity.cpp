@@ -19,7 +19,7 @@ fw::bt::Status handle_discontinuity(fw::InOut<State>& state, fw::Optional<const 
         requestResetActiveMap(t);
     } else if (t.last.timestamp > t.current.timestamp) {
         createMapInAtlas(t, *state);
-    } else if (imuInitialized(a) && inertialBA2(a)) {
+    } else if (a.imuInitialized() && a.inertialBA2()) {
         createMapInAtlas(t, *state);
     } else {
         requestResetActiveMap(t);

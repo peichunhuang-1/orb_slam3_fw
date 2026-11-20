@@ -12,7 +12,7 @@ fw::bt::Status track_failed(fw::InOut<State>& state, fw::Write<tracking::Tracker
     tracking::Tracker& t = *tracker;
     ok = false;
     if (state.has_value() && *state == State::OK) {
-        if (t.inertial && (!imuInitialized(tracker->view) || !inertialBA2(tracker->view))) requestResetActiveMap(t);
+        if (t.inertial && (!tracker->view.imuInitialized() || !tracker->view.inertialBA2())) requestResetActiveMap(t);
         *state = State::RECENTLY_LOST;
         t.timestamp_lost = t.current.timestamp;
     }

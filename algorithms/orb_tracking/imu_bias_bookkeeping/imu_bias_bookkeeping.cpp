@@ -7,7 +7,7 @@ namespace {
 
 fw::bt::Status imu_bias_bookkeeping(const bool& ok, fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
-    if (!orb_tracking::imuInitialized(tracker->view) || !ok) return fw::bt::Status::SUCCESS;
+    if (!tracker->view.imuInitialized() || !ok) return fw::bt::Status::SUCCESS;
     if (t.current.id == t.last_reloc_frame_id + t.frames_to_reset_imu) {
         // ResetFrameIMU: nothing
     } else if (t.current.id > t.last_reloc_frame_id + 30) {

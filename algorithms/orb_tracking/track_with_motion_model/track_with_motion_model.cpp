@@ -22,7 +22,7 @@ fw::bt::Status track_with_motion_model(fw::Write<tracking::Tracker> tracker) {
     if (const map::KeyFrame* ref = a.keyframe(t.last.reference_kf); ref && !t.relative_poses.empty())
         t.last.setPose(t.relative_poses.back() * ref->pose());
 
-    if (imuInitialized(a) && f.id > t.last_reloc_frame_id + t.frames_to_reset_imu) {
+    if (a.imuInitialized() && f.id > t.last_reloc_frame_id + t.frames_to_reset_imu) {
         predictStateImu(a, t);
         return fw::bt::Status::SUCCESS;
     }

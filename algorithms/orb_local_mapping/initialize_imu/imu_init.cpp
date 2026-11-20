@@ -63,8 +63,7 @@ bool imuInitDue(const map::Atlas& a, const local_mapping::LocalMapper& m, std::v
     constexpr std::size_t kMinKeyFrames = 10;
     constexpr double kMinTime = 1.0;
     if (m.reset == local_mapping::PendingReset::all) return false;
-    const map::Map* current = a.findMap(a.current);
-    if (!current || current->keyframes.size() < kMinKeyFrames) return false;
+    if (a.keyFramesInMap() < int(kMinKeyFrames)) return false;
     const map::KeyFrame* cur = a.keyframe(m.current);
     if (!cur) return false;
 

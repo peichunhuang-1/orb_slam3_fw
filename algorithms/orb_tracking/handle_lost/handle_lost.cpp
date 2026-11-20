@@ -12,7 +12,7 @@ fw::bt::Status handle_lost(fw::InOut<tracking::State>& state, fw::Write<tracking
     const std::uint64_t seq = t.next_edit_seq;
     const map::Atlas& a = tracker->view;
     if (!state.has_value()) state.emplace(tracking::State::LOST);
-    if (keyFramesInMap(a) <= 10 || (t.inertial && !imuInitialized(a))) requestResetActiveMap(t);
+    if (a.keyFramesInMap() <= 10 || (t.inertial && !a.imuInitialized())) requestResetActiveMap(t);
     else createMapInAtlas(t, *state);
     sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;

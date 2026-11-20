@@ -66,6 +66,19 @@ struct Atlas {
     const Map* findMap(MapId id) const { return maps.find(id); }
     Map* editMap(MapId id) { return maps.find(id) ? maps.edit(id).operator->() : nullptr; }
     bool hasCurrentMap() const { return findMap(current) != nullptr; }
+    // The current map's KeyFramesInMap, isImuInitialized, GetIniertialBA2 (0 / false without a current map)
+    int keyFramesInMap() const {
+        const Map* m = findMap(current);
+        return m ? int(m->keyframes.size()) : 0;
+    }
+    bool imuInitialized() const {
+        const Map* m = findMap(current);
+        return m && m->imu_initialized;
+    }
+    bool inertialBA2() const {
+        const Map* m = findMap(current);
+        return m && m->imu_ba2;
+    }
     // GetCurrentMap: creates the first map if there is none (createNewMap)
     const Map& currentMap();
     const Map& currentMap() const;  // throws std::logic_error if there is none

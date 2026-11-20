@@ -11,7 +11,7 @@ fw::bt::Status start_new_map(fw::InOut<tracking::State>& state, fw::Write<tracki
     tracking::Tracker& t = *tracker;
     const std::uint64_t seq = t.next_edit_seq;
     if (!state.has_value()) state.emplace(tracking::State::LOST);
-    if (keyFramesInMap(tracker->view) < 10) requestResetActiveMap(t);
+    if (tracker->view.keyFramesInMap() < 10) requestResetActiveMap(t);
     else createMapInAtlas(t, *state);
     t.last_keyframe = map::kNone;
     sendEdits(t, seq, atlas_edits);

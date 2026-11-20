@@ -13,11 +13,6 @@
 
 namespace orb_tracking {
 
-// ---- the current map
-int keyFramesInMap(const map::Atlas& a);  // KeyFramesInMap (0 without a current map)
-bool imuInitialized(const map::Atlas& a);  // isImuInitialized
-bool inertialBA2(const map::Atlas& a);     // GetIniertialBA2
-
 // ---- local mapping, seen through its status (none: idle, accepting keyframes, the IMU not initialized)
 const tracking::MapperStatus& mapperOf(const fw::Optional<const tracking::MapperStatus&>& m);
 

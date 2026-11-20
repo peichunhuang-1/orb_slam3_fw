@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -155,6 +156,16 @@ void runCase(const std::string& name, const fixture::Rig& rig) {
     const ba::Result r = ba_solver::solveLocalInertial(*p);
     check(r.ok == (f.scalar("ok") != 0), name + ": convergence verdict");
     if (r.ok) orb_local_mapping::applyLocalBA(a, p->map, r);
+    // FAIL LOCAL-INERTIAL BA: no fixture hits it (LM only takes steps that lower the cost, so only a NaN can);
+    // one NaN measurement makes the error NaN, which fails unless bLarge
+    if (!p->observations.empty()) {
+        ba::Problem bad = *p;
+        bad.observations[0].uv.x() = std::numeric_limits<float>::quiet_NaN();
+        const ba::Result rb = ba_solver::solveLocalInertial(bad);
+        check(rb.ok == large, name + ": a NaN error " + (large ? "passes (bLarge)" : "fails"));
+        check(rb.ok || (rb.keyframes.empty() && rb.points.empty() && rb.outliers.empty()),
+              name + ": a failed result carries nothing to write back");
+    }
 
     int slots_bad = 0, erased = 0;
     for (int k = 0; k < K; ++k) {

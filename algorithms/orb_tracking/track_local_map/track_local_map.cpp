@@ -22,7 +22,7 @@ using namespace orb_tracking;
 
 void optimize(const map::Atlas& a, tracking::Tracker& t) {
     tracking::Frame& f = t.current;
-    if (!imuInitialized(a) || f.id <= t.last_reloc_frame_id + t.frames_to_reset_imu) {
+    if (!a.imuInitialized() || f.id <= t.last_reloc_frame_id + t.frames_to_reset_imu) {
         optimizePose(f, a);
         return;
     }

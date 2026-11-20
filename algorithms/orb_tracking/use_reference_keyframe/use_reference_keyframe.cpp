@@ -6,7 +6,7 @@ namespace {
 
 fw::bt::Status use_reference_keyframe(fw::Read<tracking::Tracker> tracker) {
     const tracking::Tracker& t = *tracker;
-    const bool ref = (!t.has_velocity && !orb_tracking::imuInitialized(tracker->view)) ||
+    const bool ref = (!t.has_velocity && !tracker->view.imuInitialized()) ||
                      t.current.id < t.last_reloc_frame_id + 2;
     return ref ? fw::bt::Status::SUCCESS : fw::bt::Status::FAILURE;
 }
