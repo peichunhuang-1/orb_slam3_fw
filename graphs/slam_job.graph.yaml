@@ -1,0 +1,50 @@
+# ORB-SLAM3 tracking + local mapping (KB8) on a EuRoC bag; ends by itself at the end of the bag (mode: job).
+# tracking_job.graph.yaml without local mapping stays as it is.
+# Design: algorithms/orb_tracking/docs/DESIGN.md, algorithms/orb_local_mapping/docs/DESIGN.md
+version: 1
+ros_distro: humble
+mode: job
+use_sim_time: true
+boxes:
+  main:
+    resources:
+      gpu:          { type: gpu/Device }
+      atlas:        { type: map/Atlas }                    # tracking and local mapping (loop closing later)
+      tracker:      { type: tracking/Tracker }             # the tracking tree's own state
+      local_mapper: { type: local_mapping/LocalMapper }    # the local mapping tree's own state
+      vocabulary:   { type: map/Vocabulary, store: "data://orb_vocabulary/ORBvoc.bin" }   # loaded at start, never saved
+    blocks:
+      euroc_mcap_driver:   { driver: euroc_mcap_driver }
+      orb_extractor_left:  { algorithm: OrbExtractor }
+      orb_extractor_right: { algorithm: OrbExtractor }
+      orb_matcher:         { algorithm: OrbMatcher }
+      imu_preintegration:  { algorithm: ImuPreintegration }
+      tracking:            { tree: trees/tracking/tracking.tree.yaml }
+      local_mapping:       { tree: trees/local_mapping/local_mapping.tree.yaml }
+      ba_solver:           { algorithm: BaSolver }         # no resource: the optimizations outside the lock
+edges:
+  - config://euroc_mcap_driver.yaml -> euroc_mcap_driver.params
+  - config://orb_extractor.yaml -> [orb_extractor_left.params, orb_extractor_right.params]
+  - config://orb_matcher.yaml -> orb_matcher.params
+  - config://orb_tracking.yaml -> [tracking.params, local_mapping.params]
+  - euroc_mcap_driver.left -> orb_extractor_left.image
+  - euroc_mcap_driver.right -> orb_extractor_right.image
+  - euroc_mcap_driver.calib -> [orb_matcher.calib, imu_preintegration.calib, tracking.calib]
+  - euroc_mcap_driver.imu -> imu_preintegration.imu
+  - orb_extractor_left.features -> orb_matcher.left
+  - orb_extractor_right.features -> orb_matcher.right
+  - orb_matcher.stereo -> imu_preintegration.frame
+  - imu_preintegration.frame_imu -> tracking.frame
+  # tracking <-> local mapping
+  - tracking.keyframe -> local_mapping.keyframe
+  - tracking.mapper_cmd -> local_mapping.mapper_cmd
+  - tracking.tracking -> local_mapping.tracking
+  - local_mapping.mapper -> tracking.mapper
+  # local BA / IMU initialization outside the lock
+  - local_mapping.ba_problem -> ba_solver.problem
+  - ba_solver.result -> local_mapping.ba_result
+  - gpu -> [orb_extractor_left.gpu, orb_extractor_right.gpu, orb_matcher.gpu]
+  - atlas -> [tracking.atlas, local_mapping.atlas]
+  - tracker -> tracking.tracker
+  - local_mapper -> local_mapping.local_mapper
+  - vocabulary -> [tracking.vocabulary, local_mapping.vocabulary]

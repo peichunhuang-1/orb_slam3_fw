@@ -1,0 +1,28 @@
+# What arrived in this tick: InsertKeyFrame, tracking's requests (RequestReset, RequestResetActiveMap,
+# InterruptBA), and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
+# the keys keep the last keyframe and command.
+version: 1
+inputs:
+  keyframe:   { type: map/KeyFrameRef }
+  mapper_cmd: { type: tracking/MapperCommand }
+  params:     { type: OrbTrackingParams }
+outputs:
+  inertial: { type: fw/bool }
+  mapper:   { type: tracking/MapperStatus }
+resources:   # the parent's of the same name
+  local_mapper: { type: local_mapping/LocalMapper }
+root:
+  Sequence:
+    children:
+      - read_params: { params: "{params}", inertial: "{inertial}" }
+      - ForceSuccess:
+          child:
+            SkipUnlessUpdated:
+              entry: keyframe
+              child: { insert_keyframe: { keyframe: "{keyframe}" } }
+      - ForceSuccess:
+          child:
+            SkipUnlessUpdated:
+              entry: mapper_cmd
+              child: { handle_mapper_command: { mapper_cmd: "{mapper_cmd}" } }
+      - publish_mapper_status: { mapper: "{mapper}" }

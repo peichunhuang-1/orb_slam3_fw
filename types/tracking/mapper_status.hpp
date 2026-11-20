@@ -24,6 +24,8 @@ struct MapperStatus {
     float imu_scale = 1;
     imu::Bias imu_bias;
     map::KeyFrameId imu_keyframe = map::kNone;
+    // InitializeIMU's mpTracker->mState = OK at its end: applied once per sequence number (0: none yet)
+    std::uint64_t tracking_ok_seq = 0;
 };
 
 }  // namespace tracking
