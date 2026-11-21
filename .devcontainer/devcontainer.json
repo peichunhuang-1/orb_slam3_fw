@@ -1,18 +1,12 @@
 {
   "name": "orb_slam3_fw",
-  "build": { "dockerfile": "Dockerfile" },
+  // Same container on a Raspberry Pi 5 and on macOS (Docker Desktop, Apple Silicon); compose.yaml + detect_gpu.sh
+  // pass /dev/dri in only where the host has it.
+  "initializeCommand": "sh .devcontainer/detect_gpu.sh",
+  "dockerComposeFile": "compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspaces/orb_slam3_fw",
   "remoteUser": "fw",
-  "runArgs": [
-    // Add this robot's devices here, for example "--device=/dev/ttyUSB0"
-    "--network=host",
-    "--ipc=host",
-    "--cap-add=SYS_NICE",
-    "--ulimit=rtprio=99",
-    // gdb on a box (fw/docs/reference/debugging.md): without it, "ptrace: Inappropriate ioctl for device"
-    "--cap-add=SYS_PTRACE",
-    // GPU (VideoCore VII render node) for the orb_extractor Vulkan backend; gpu_access.sh opens it up
-    "--device=/dev/dri"
-  ],
   "postStartCommand": "bash .devcontainer/gpu_access.sh",
   "customizations": { "vscode": { "extensions": ["/usr/local/share/fw/fw-editor.vsix", "/usr/local/share/fw/fw-viewer.vsix"] } }
 }

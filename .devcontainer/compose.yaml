@@ -1,0 +1,24 @@
+# The dev container, as compose so that the GPU device can depend on the host: devcontainer.json's
+# initializeCommand (detect_gpu.sh) writes .devcontainer/.env with FW_GPU_DEVICE before this starts.
+#   Pi 5 : FW_GPU_DEVICE=/dev/dri                  (VideoCore VII render node, gpu_access.sh opens it up)
+#   macOS: FW_GPU_DEVICE=/dev/null:/dev/fw-no-gpu  (placeholder, no /dev/dri in Docker Desktop's VM)
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/orb_slam3_fw:cached
+    # Docker Desktop: host networking is the VM's unless enabled in Settings > Resources > Network
+    network_mode: host
+    ipc: host
+    cap_add:
+      - SYS_NICE
+      # gdb on a box (fw/docs/reference/debugging.md): without it, "ptrace: Inappropriate ioctl for device"
+      - SYS_PTRACE
+    ulimits:
+      rtprio: 99
+    devices:
+      # Add this robot's devices here, for example /dev/ttyUSB0 (Pi only: a missing device fails the start)
+      - ${FW_GPU_DEVICE:-/dev/null:/dev/fw-no-gpu}

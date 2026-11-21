@@ -13,3 +13,5 @@ state/
 .DS_Store
 # ORB vocabulary: the compressed file is in git, the extracted one is not
 data/orb_vocabulary/ORBvoc.bin
+# written by .devcontainer/detect_gpu.sh on each host
+.devcontainer/.env

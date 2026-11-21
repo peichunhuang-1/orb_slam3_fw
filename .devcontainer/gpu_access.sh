@@ -9,7 +9,8 @@
 shopt -s nullglob
 nodes=(/dev/dri/renderD*)
 if [ ${#nodes[@]} -eq 0 ]; then
-    echo "gpu_access: no /dev/dri/renderD* in the container (is --device=/dev/dri in devcontainer.json?)" >&2
+    # macOS (Docker Desktop has no GPU in its VM), or a Pi whose /dev/dri was not detected by detect_gpu.sh
+    echo "gpu_access: no /dev/dri/renderD* in the container, Vulkan runs on lavapipe (CPU, needs allowCpuDevice)" >&2
     exit 0
 fi
 for n in "${nodes[@]}" /dev/dri/card*; do
