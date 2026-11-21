@@ -66,6 +66,8 @@ private:
     double k_[4] = {0, 0, 0, 0};
     int width_ = 0, height_ = 0;
     double theta_max_ = 0, r_max_ = 0;   // r(θ) increasing on [0, theta_max_]
+
+    friend void fw_tile_type_declared(const KannalaBrandt8*);  // atlas tile (types/map/tiles.hpp)
 };
 
 }  // namespace camera

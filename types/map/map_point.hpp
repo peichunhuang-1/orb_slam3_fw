@@ -14,6 +14,7 @@
 
 #include "types/map/flat.hpp"
 #include "types/map/ids.hpp"
+#include "types/map/tiles.hpp"
 
 namespace map {
 
@@ -21,6 +22,7 @@ namespace map {
 struct Observation {
     int left = -1, right = -1;
 };
+FW_TILE_TYPE(Observation, left, right);
 
 struct MapPoint {
     MapPointId id = kNone;
@@ -61,5 +63,7 @@ struct MapPoint {
         return it == observations.end() ? Observation() : it->second;
     }
 };
+FW_TILE_TYPE(MapPoint, id, map, origin_map, first_kf, first_frame, pos, normal, descriptor, ref_kf, observations,
+             n_obs, visible, found, bad, in_map, replaced, min_distance, max_distance);
 
 }  // namespace map

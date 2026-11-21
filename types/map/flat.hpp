@@ -7,7 +7,10 @@
 #include <initializer_list>
 #include <stdexcept>
 #include <utility>
+#include <type_traits>
 #include <vector>
+
+#include "fw/tiled_map.hpp"
 
 namespace map {
 
@@ -115,5 +118,12 @@ public:
 private:
     std::vector<K> v_;
 };
+
+// Tiles (fw::is_tile_v) when their keys and values are: they hold one std::vector of them. FW_TILE_TYPE is for
+// a single type, so this is its hook (found by ADL) written out for the templates.
+template <class K, class V, std::enable_if_t<fw::is_tile_v<K> && fw::is_tile_v<V>, int> = 0>
+void fw_tile_type_declared(const FlatMap<K, V>*);
+template <class K, std::enable_if_t<fw::is_tile_v<K>, int> = 0>
+void fw_tile_type_declared(const FlatSet<K>*);
 
 }  // namespace map

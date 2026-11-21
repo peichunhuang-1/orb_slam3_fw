@@ -17,6 +17,7 @@
 #include "types/imu/preintegrated.hpp"
 #include "types/map/flat.hpp"
 #include "types/map/ids.hpp"
+#include "types/map/tiles.hpp"
 #include "types/map/vocabulary.hpp"
 #include "types/orb/frame_features.hpp"
 
@@ -40,6 +41,15 @@ struct KeyFrameData {
     bool has_imu_calib = false;
     geometry::SE3f T_cb;
 };
+
+// KeyFrame's pose and what is derived from it (one member, so KeyFrame stays within FW_TILE_TYPE's 24)
+struct KeyFramePose {
+    geometry::SE3f Tcw, Twc;
+    Eigen::Vector3f Owb = Eigen::Vector3f::Zero();
+    Eigen::Vector3f Vw = Eigen::Vector3f::Zero();
+    bool has_velocity = false;
+};
+FW_TILE_TYPE(KeyFramePose, Tcw, Twc, Owb, Vw, has_velocity);
 
 struct KeyFrame {
     KeyFrameId id = kNone;
@@ -71,24 +81,25 @@ struct KeyFrame {
 
     // Pose (SetPose keeps the derived values; data first)
     void setPose(const geometry::SE3f& T) {
-        Tcw_ = T;
-        Twc_ = T.inverse();
-        if (data && data->has_imu_calib) Owb_ = Twc_.rotationMatrix() * data->T_cb.translation() + Twc_.translation();
+        pose_.Tcw = T;
+        pose_.Twc = T.inverse();
+        if (data && data->has_imu_calib)
+            pose_.Owb = pose_.Twc.rotationMatrix() * data->T_cb.translation() + pose_.Twc.translation();
     }
-    const geometry::SE3f& pose() const { return Tcw_; }           // Tcw
-    const geometry::SE3f& poseInverse() const { return Twc_; }    // Twc
-    Eigen::Vector3f cameraCenter() const { return Twc_.translation(); }
-    Eigen::Vector3f rightCameraCenter() const { return (Twc_ * data->Tlr).translation(); }
-    geometry::SE3f rightPose() const { return data->Trl * Tcw_; }            // Trw
-    geometry::SE3f rightPoseInverse() const { return Twc_ * data->Tlr; }     // Twr
-    Eigen::Vector3f imuPosition() const { return Owb_; }
-    Eigen::Matrix3f imuRotation() const { return (Twc_ * data->T_cb).rotationMatrix(); }
-    geometry::SE3f imuPose() const { return Twc_ * data->T_cb; }  // Twb
+    const geometry::SE3f& pose() const { return pose_.Tcw; }    // Tcw
+    const geometry::SE3f& poseInverse() const { return pose_.Twc; }  // Twc
+    Eigen::Vector3f cameraCenter() const { return pose_.Twc.translation(); }
+    Eigen::Vector3f rightCameraCenter() const { return (pose_.Twc * data->Tlr).translation(); }
+    geometry::SE3f rightPose() const { return data->Trl * pose_.Tcw; }         // Trw
+    geometry::SE3f rightPoseInverse() const { return pose_.Twc * data->Tlr; }  // Twr
+    Eigen::Vector3f imuPosition() const { return pose_.Owb; }
+    Eigen::Matrix3f imuRotation() const { return (pose_.Twc * data->T_cb).rotationMatrix(); }
+    geometry::SE3f imuPose() const { return pose_.Twc * data->T_cb; }  // Twb
     void setVelocity(const Eigen::Vector3f& v) {
-        Vw_ = v;
-        has_velocity_ = true;
+        pose_.Vw = v;
+        pose_.has_velocity = true;
     }
-    const Eigen::Vector3f& velocity() const { return Vw_; }
+    const Eigen::Vector3f& velocity() const { return pose_.Vw; }
     // SetNewBias: the bias, and the preintegration's (a new copy: the old one may be shared)
     void setNewBias(const imu::Bias& b) {
         bias = b;
@@ -98,7 +109,7 @@ struct KeyFrame {
             preintegrated = std::move(p);
         }
     }
-    bool hasVelocity() const { return has_velocity_; }
+    bool hasVelocity() const { return pose_.has_velocity; }
 
     // Covisibles: the n best, and those with weight >= w
     std::vector<KeyFrameId> bestCovisibles(int n) const {
@@ -111,10 +122,12 @@ struct KeyFrame {
     }
 
 private:
-    geometry::SE3f Tcw_, Twc_;
-    Eigen::Vector3f Owb_ = Eigen::Vector3f::Zero();
-    Eigen::Vector3f Vw_ = Eigen::Vector3f::Zero();
-    bool has_velocity_ = false;
+    KeyFramePose pose_;
+    friend void fw_tile_type_declared(const KeyFrame*);  // FW_TILE_TYPE below reads pose_
 };
+
+FW_TILE_TYPE(KeyFrame, id, map, origin_map, data, points, bias, imu, preintegrated, prev, next, connected,
+             ordered_connected, ordered_weights, first_connection, parent, children, loop_edges, merge_edges,
+             not_erase, to_be_erased, bad, Tcp, pose_);
 
 }  // namespace map

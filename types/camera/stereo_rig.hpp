@@ -32,6 +32,8 @@ private:
     KannalaBrandt8 cam_[2];
     Eigen::Matrix3f R_12_ = Eigen::Matrix3f::Identity();
     Eigen::Vector3f t_12_ = Eigen::Vector3f::Zero();
+
+    friend void fw_tile_type_declared(const StereoRig*);  // atlas tile (types/map/tiles.hpp)
 };
 
 }  // namespace camera

@@ -8,6 +8,7 @@
 
 #include "types/map/flat.hpp"
 #include "types/map/ids.hpp"
+#include "types/map/tiles.hpp"
 
 namespace map {
 
@@ -29,5 +30,7 @@ struct Map {
     int change_index = 0;           // mnMapChange
     int big_change_index = 0;       // mnBigChangeIdx
 };
+FW_TILE_TYPE(Map, id, keyframes, n_points, keyframe_origins, init_kf_id, max_kf_id, initial_kf, lower_kf, inertial,
+             imu_initialized, imu_ba1, imu_ba2, in_use, bad, change_index, big_change_index);
 
 }  // namespace map
