@@ -12,7 +12,6 @@ boxes:
       gpu:        { type: gpu/Device }
       atlas:      { type: map/Atlas }          # shared with local_mapping / loop_closing later
       tracker:    { type: tracking/Tracker }   # the tracking tree's own state
-      vocabulary: { type: map/Vocabulary, store: "data://orb_vocabulary/ORBvoc.bin" }   # loaded at start, never saved
     blocks:
       euroc_mcap_driver:   { driver: euroc_mcap_driver }
       orb_extractor_left:  { algorithm: OrbExtractor }
@@ -36,4 +35,4 @@ edges:
   - gpu -> [orb_extractor_left.gpu, orb_extractor_right.gpu, orb_matcher.gpu]
   - atlas -> tracking.atlas
   - tracker -> tracking.tracker
-  - vocabulary -> tracking.vocabulary
+  - orb_vocabulary://ORBvoc.bin -> tracking.vocabulary

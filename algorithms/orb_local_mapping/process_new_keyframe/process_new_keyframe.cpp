@@ -5,15 +5,15 @@
 
 namespace {
 
-fw::bt::Status process_new_keyframe(fw::Write<map::Atlas> atlas, fw::Write<local_mapping::LocalMapper> mapper,
-                                    fw::Read<map::Vocabulary> vocabulary) {
+fw::bt::Status process_new_keyframe(const map::Vocabulary& vocabulary, fw::Write<map::Atlas> atlas,
+                                    fw::Write<local_mapping::LocalMapper> mapper) {
     mapper->processing = true;
-    return orb_local_mapping::processNewKeyFrame(*atlas, *mapper, *vocabulary) ? fw::bt::Status::SUCCESS
+    return orb_local_mapping::processNewKeyFrame(*atlas, *mapper, vocabulary) ? fw::bt::Status::SUCCESS
                                                                               : fw::bt::Status::FAILURE;
 }
 
 }  // namespace
 
 FW_REGISTER_BT_ACTION(process_new_keyframe,
-                      RESOURCES(("atlas", map::Atlas, write), ("local_mapper", local_mapping::LocalMapper, write),
-                                ("vocabulary", map::Vocabulary, read)));
+                      INPUTS(("vocabulary", map::Vocabulary, latest)),
+                      RESOURCES(("atlas", map::Atlas, write), ("local_mapper", local_mapping::LocalMapper, write)));

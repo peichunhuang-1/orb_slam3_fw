@@ -116,7 +116,7 @@ Sim3 對齊的尺度是 1.003–1.005。這裡算的是每個影格當下的位�
  │              └─────────────────┘                                                           │
  │                                                                                            │
  │   atlas (r: tracking, w: local_mapping)   tracker (w: tracking)                            │
- │   local_mapper (w: local_mapping)      vocabulary (r: tracking, local_mapping)   （資源）  │
+ │   local_mapper (w: local_mapping)                                                （資源）  │
  └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,15 +196,14 @@ local_mapping (tick N, 持有 atlas)        ba_solver (不持有資源)         
 
 | 放在 | 內容 | 理由 |
 |---|---|---|
-| **埠** | `atlas_edits`、`mapper_cmd`、`tracking`、`params`；`mapper`、`loop_keyframe`；`ba_problem`、`ba_result` | 單向、不可變 |
+| **埠** | `atlas_edits`、`mapper_cmd`、`tracking`、`params`、`vocabulary`（`orb_vocabulary://` plugin，latest）；`mapper`、`loop_keyframe`；`ba_problem`、`ba_result` | 單向、不可變 |
 | **資源 `atlas`**（write） | keyframe、map point、地圖（含 `imu_initialized`、`imu_ba1`、`imu_ba2`）、BoW 索引 | tracking 只在每幀開頭讀一次（`sync_atlas`），寫入都由 local mapping 做 |
 | **資源 `local_mapper`**（`local_mapping/LocalMapper`，write，只有 local_mapping 用） | `LocalMapping` 的成員：keyframe 佇列（`mlNewKeyFrames`）、目前的 keyframe、`mlpRecentAddedMapPoints`、`abort_ba`、重設要求、`mbInertial`、`mTinit`、`mbBadImu`、`bInitializing`、IMU 初始化的狀態（`mRwg`、`mScale`、`mbg`、`mba`、`mIdxInit`、`mnKFs`）、`UpdateFrameIMU` 與 `mState = OK` 的序號、等待中的最佳化（序號、階段、寫回用的資料）、查詢暫存 | 與 `tracker` 同理：葉節點之間共用的狀態只能放在鍵或資源；這些成員大、每次都和 `atlas` 一起讀寫 |
-| **資源 `vocabulary`**（read） | ORB 詞彙樹 | `ProcessNewKeyFrame` 的 `ComputeBoW` |
 | **鍵** | `inertial`（樹的分支用，由 `receive_inputs` 依 `params.sensor` 寫入） | |
 
 **查詢暫存**：原版放在 `KeyFrame`、`MapPoint` 上的 `mnBAGlobalForKF`、`mTcwGBA`、`mTcwBefGBA`、`mVwbGBA`、`mBiasGBA`、`mPosGBA` 由 local mapping 自己保存在 `local_mapper`（以 id 為索引）。`mnFuseTargetForKF`、`mnFuseCandidateForKF` 只在一次 SearchInNeighbors 裡有意義（每個 keyframe 只當一次 current），`mnBALocalForKF`、`mnBAFixedForKF` 也只在一次 `LocalBundleAdjustment` 裡有意義，所以都改成該次呼叫裡的 set，不保存。之後 loop closing 的 global BA 也用 `mnBAGlobalForKF` 這組，由它自己另存一份。
 
-**鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖與 `vocabulary` 的讀取鎖。`atlas` 是 `versioned`，鎖與發布是分開的：寫入鎖持有到 tick 結束，但每個寫入 `atlas` 的葉節點回傳時就發布一個新版本（同一個 tick 裡後面的葉節點接著在它上面寫）。所以只讀 `atlas` 的葉節點要宣告成 `read`，否則每次都多一個空的版本。
+**鎖的範圍**：每個 tick 取一次 `atlas`、`local_mapper` 的寫入鎖。`atlas` 是 `versioned`，鎖與發布是分開的：寫入鎖持有到 tick 結束，但每個寫入 `atlas` 的葉節點回傳時就發布一個新版本（同一個 tick 裡後面的葉節點接著在它上面寫）。所以只讀 `atlas` 的葉節點要宣告成 `read`，否則每次都多一個空的版本。
 
 - 只有接收資料的 tick（最佳化進行中到達的 `atlas_edits`、`mapper_cmd`）很短。
 - 處理一個 keyframe 的同步部分（`ProcessNewKeyFrame` 到 `SearchInNeighbors`、`KeyFrameCulling`）在一個 tick 內完成。`atlas` 是 `versioned`，tracking 不等它，讀到的是最近發布的版本，與原版靠每個物件自己的 mutex 讓 tracking 同時進行相近（[types/map/docs/DESIGN.md](../../../types/map/docs/DESIGN.md#第-3-步的驗證)）。
@@ -267,7 +266,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 
 ## 葉節點
 
-`atlas`、`local_mapper`、`vocabulary` 在樹檔中不寫，依同名規則接到樹的資源。名稱在整個專案中唯一（tracking 已用 `state_is`、`is_true`）。
+`atlas`、`local_mapper` 在樹檔中不寫，依同名規則接到樹的資源；`vocabulary` 是樹的輸入，經由 `process_keyframe` 子樹傳給葉節點。名稱在整個專案中唯一（tracking 已用 `state_is`、`is_true`）。
 
 | 葉節點 | 種類 | 埠（鍵） | 資源 | 對應的 ORB-SLAM3 |
 |---|---|---|---|---|
@@ -277,7 +276,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `publish_mapper_status` | action | `mapper` out | atlas r、local_mapper r | tracking 讀的 `AcceptKeyFrames`、`KeyframesInQueue`、`IsInitializing`、`isStopped`、`stopRequested`、`mbBadImu`、`mbFarPoints` |
 | `has_new_keyframe` | condition | | local_mapper r | `CheckNewKeyFrames() && !mbBadImu` |
 | `mapper_idle` | action | `mapper` out | local_mapper w | `Stop()`（之後，只改 local_mapper 的旗標）、`ResetIfRequested`、`SetAcceptKeyFrames(true)` |
-| `process_new_keyframe` | action | | atlas w、local_mapper w、vocabulary r | `ProcessNewKeyFrame`、`SetAcceptKeyFrames(false)` |
+| `process_new_keyframe` | action | `vocabulary` | atlas w、local_mapper w | `ProcessNewKeyFrame`、`SetAcceptKeyFrames(false)` |
 | `map_point_culling` | action | | atlas w、local_mapper w | `MapPointCulling` |
 | `create_new_map_points` | action | `tracking` Optional | atlas w、local_mapper w | `CreateNewMapPoints`（`SearchForTriangulation`、三角化）；結束時 `mbAbortBA = false` |
 | `queue_empty` | condition | | local_mapper r | `!CheckNewKeyFrames()` |
@@ -286,7 +285,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `enough_keyframes_for_ba` | condition | | atlas r | `mpAtlas->KeyFramesInMap() > 2` |
 | `local_bundle_adjustment` | stateful action | `inertial`、`tracking` Optional、`ba_result` Optional、`ba_problem` out、`mapper` out | atlas w、local_mapper w | inertial 且 IMU 已初始化：`mTinit` 的累加、移動不足的重設、`LocalInertialBA`；否則 `LocalBundleAdjustment` |
 | `is_inertial_uninitialized` | condition | `inertial` | atlas r、local_mapper r | `!isImuInitialized() && mbInertial` |
-| `initialize_imu` | stateful action | `prior_g`、`prior_a`、`fiba` 常值；`ba_result` Optional、`ba_problem` out、`mapper` out | atlas w、local_mapper w、vocabulary r | `InitializeIMU(priorG, priorA, bFIBA)` |
+| `initialize_imu` | stateful action | `prior_g`、`prior_a`、`fiba` 常值；`ba_result` Optional、`vocabulary`、`ba_problem` out、`mapper` out | atlas w、local_mapper w | `InitializeIMU(priorG, priorA, bFIBA)` |
 | `keyframe_culling` | action | | atlas w、local_mapper r | `KeyFrameCulling` |
 | `begin_inertial_ba` | action | `stage` 常值、`inertial`、`tracking` Optional | atlas w、local_mapper r | VIBA 的條件與 `SetIniertialBA1/2` |
 | `send_to_loop_closing` | action | `loop_keyframe` out | atlas r、local_mapper r | `mpLoopCloser->InsertKeyFrame` |

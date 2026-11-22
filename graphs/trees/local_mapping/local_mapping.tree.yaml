@@ -9,6 +9,7 @@ inputs:
   ba_result:  { type: ba/Result, mode: wake, queue: { depth: 2, policy: drop_oldest } }
   tracking:   { type: tracking/Status }             # latest: tracking's state and inliers (mpTracker)
   params:     { type: OrbTrackingParams }           # latest: the sensor
+  vocabulary: { type: map/Vocabulary }             # latest: ComputeBoW (orb_vocabulary:// plugin)
 outputs:
   mapper:        { type: tracking/MapperStatus }    # -> tracking.mapper
   ba_problem:    { type: ba/Problem }               # -> ba_solver.problem
@@ -16,7 +17,6 @@ outputs:
 resources:
   atlas:        { type: map/Atlas }                 # shared with tracking
   local_mapper: { type: local_mapping/LocalMapper } # LocalMapping's members
-  vocabulary:   { type: map/Vocabulary }            # ComputeBoW, read only
 blackboard:
   inertial: { type: fw/bool, init: false }          # mbInertial, set by read_params from params.sensor
 root:
@@ -34,7 +34,7 @@ root:
                 Sequence:
                   children:
                     - has_new_keyframe: {}
-                    - SubTree: { tree: trees/local_mapping/process_keyframe.tree.yaml, name: process_keyframe,
+                    - SubTree: { tree: trees/local_mapping/process_keyframe.tree.yaml, name: process_keyframe, vocabulary: "{vocabulary}",
                                  inertial: "{inertial}", tracking: "{tracking}", ba_result: "{ba_result}",
                                  mapper: "{mapper}", ba_problem: "{ba_problem}", loop_keyframe: "{loop_keyframe}" }
       - mapper_idle: { mapper: "{mapper}" }

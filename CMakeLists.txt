@@ -92,10 +92,10 @@ if(BUILD_TESTING)
   add_test(NAME orb_matcher_subpixel_test COMMAND orb_matcher_subpixel_test --trials 10)
 endif()
 
-# ORB vocabulary (map::Vocabulary's store): data/orb_vocabulary/ORBvoc.bin is not in git; it is extracted from
+# ORB vocabulary (the orb_vocabulary:// plugin): orb_vocabulary/ORBvoc.bin is not in git; it is extracted from
 # ORBvoc.bin.tar.gz when missing. tools/orb_vocabulary made that file from ORB-SLAM3's ORBvoc.txt (not installed:
 # build/orb_slam3_fw/orb_vocabulary TEXT BINARY).
-set(ORB_VOCABULARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data/orb_vocabulary)
+set(ORB_VOCABULARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/orb_vocabulary)
 set(ORB_VOCABULARY_BIN ${ORB_VOCABULARY_DIR}/ORBvoc.bin)
 if(NOT EXISTS ${ORB_VOCABULARY_BIN} AND EXISTS ${ORB_VOCABULARY_BIN}.tar.gz)
   message(STATUS "extracting ${ORB_VOCABULARY_BIN}")

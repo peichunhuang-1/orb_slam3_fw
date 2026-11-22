@@ -1,6 +1,6 @@
 // map::Vocabulary vs DBoW2 (tests/fixtures/orb_slam3/bow): transform's BowVector and FeatureVector, and the L1
 // scores, on ORB-SLAM3's vocabulary. Usage: types_vocabulary_test [ORBvoc.bin] (default: the build's
-// data/orb_vocabulary/ORBvoc.bin).
+// orb_vocabulary/ORBvoc.bin).
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>

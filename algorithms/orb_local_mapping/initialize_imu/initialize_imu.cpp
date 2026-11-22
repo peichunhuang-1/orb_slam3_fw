@@ -28,8 +28,8 @@ using local_mapping::Waiting;
 
 class InitializeImu {
 public:
-    Status start(const float& prior_g, const float& prior_a, const bool& fiba, fw::Write<map::Atlas> atlas,
-                 fw::Write<local_mapping::LocalMapper> mapper, fw::Read<map::Vocabulary> vocabulary,
+    Status start(const float& prior_g, const float& prior_a, const bool& fiba, const map::Vocabulary& vocabulary,
+                 fw::Write<map::Atlas> atlas, fw::Write<local_mapping::LocalMapper> mapper,
                  fw::Optional<ba::Problem>& ba_problem, fw::Optional<tracking::MapperStatus>& status) {
         (void)fiba;
         local_mapping::LocalMapper& m = *mapper;
@@ -37,7 +37,7 @@ public:
         double first_ts = 0;
         if (!orb_local_mapping::imuInitDue(*atlas, m, keyframes, first_ts)) return Status::SUCCESS;
         m.initializing = true;
-        while (orb_local_mapping::processNewKeyFrame(*atlas, m, *vocabulary)) keyframes.push_back(m.current);
+        while (orb_local_mapping::processNewKeyFrame(*atlas, m, vocabulary)) keyframes.push_back(m.current);
 
         ba::Problem p = orb_local_mapping::inertialInitProblem(*atlas, m, keyframes, first_ts, prior_g, prior_a);
         p.seq = m.next_seq++;
@@ -53,8 +53,8 @@ public:
     }
 
     Status running(const float& prior_g, const float& prior_a, const bool& fiba,
-                   fw::Optional<const ba::Result&> ba_result, fw::Write<map::Atlas> atlas,
-                   fw::Write<local_mapping::LocalMapper> mapper, fw::Read<map::Vocabulary> vocabulary,
+                   fw::Optional<const ba::Result&> ba_result, const map::Vocabulary& vocabulary,
+                   fw::Write<map::Atlas> atlas, fw::Write<local_mapping::LocalMapper> mapper,
                    fw::Optional<ba::Problem>& ba_problem, fw::Optional<tracking::MapperStatus>& status) {
         local_mapping::LocalMapper& m = *mapper;
         if (!ba_result.has_value() || ba_result->seq != m.pending.seq) return Status::RUNNING;
@@ -80,7 +80,7 @@ public:
         }
 
         // Stage 3
-        while (orb_local_mapping::processNewKeyFrame(*atlas, m, *vocabulary)) w.imu_keyframes.push_back(m.current);
+        while (orb_local_mapping::processNewKeyFrame(*atlas, m, vocabulary)) w.imu_keyframes.push_back(m.current);
         if (w.waiting == Waiting::imu_init_full) {
             orb_local_mapping::correctFromOrigins(*atlas, m, w.map, w.gba_id, w.imu_keyframes.size());
         } else {
@@ -107,13 +107,12 @@ private:
 
 FW_REGISTER_BT_ACTION_CLASS(InitializeImu,
     INPUTS(("prior_g", float, latest), ("prior_a", float, latest), ("fiba", bool, latest),
-           ("ba_result", ba::Result, latest)),
-    RESOURCES(("atlas", map::Atlas, write), ("local_mapper", local_mapping::LocalMapper, write),
-              ("vocabulary", map::Vocabulary, read)),
+           ("ba_result", ba::Result, latest), ("vocabulary", map::Vocabulary, latest)),
+    RESOURCES(("atlas", map::Atlas, write), ("local_mapper", local_mapping::LocalMapper, write)),
     OUTPUTS(("ba_problem", ba::Problem), ("mapper", tracking::MapperStatus)),
-    ON_START(&InitializeImu::start, USES("prior_g", "prior_a", "fiba", "atlas", "local_mapper", "vocabulary"),
+    ON_START(&InitializeImu::start, USES("prior_g", "prior_a", "fiba", "vocabulary", "atlas", "local_mapper"),
              EMITS("ba_problem", "mapper")),
     ON_RUNNING(&InitializeImu::running,
-               USES("prior_g", "prior_a", "fiba", "ba_result", "atlas", "local_mapper", "vocabulary"),
+               USES("prior_g", "prior_a", "fiba", "ba_result", "vocabulary", "atlas", "local_mapper"),
                EMITS("ba_problem", "mapper")),
     ON_HALTED(&InitializeImu::halted));

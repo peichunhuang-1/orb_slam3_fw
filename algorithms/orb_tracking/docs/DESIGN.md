@@ -34,16 +34,17 @@
  │     └──►│ calib (latest)     frame (trigger)                                      │    │
  │         │ params (latest) ◄── config://orb_tracking.yaml                          │    │
  │         │ mapper (latest) ◄── local_mapping.status                    （之後）    │    │
+ │         │ vocabulary (latest) ◄── orb_vocabulary://ORBvoc.bin                     │    │
  │         │                                                                         │    │
  │         │ ──► pose   tracking   atlas_edits ──► local_mapping   mapper_cmd ──►     │    │
  │         └─────────────────────────────────────────────────────────────────────────┘    │
- │                 ▲ read               ▲ write               ▲ read                      │
- │               atlas               tracker              vocabulary        （資源）      │
+ │                 ▲ read               ▲ write                                           │
+ │               atlas               tracker                                （資源）      │
  │                 └──► local_mapping、loop_closing（之後）                               │
  └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **tracking** 是 behavior block，樹是 [`tracking.tree.yaml`](../../../graphs/trees/tracking/tracking.tree.yaml)。只有一個 tick 的來源：`frame`（`trigger`），每個 stereo 影格 tick 一次，對應 `GrabStereoFeatures` → `Track()`。`calib`、`params`、`mapper` 是 `latest`。
+- **tracking** 是 behavior block，樹是 [`tracking.tree.yaml`](../../../graphs/trees/tracking/tracking.tree.yaml)。只有一個 tick 的來源：`frame`（`trigger`），每個 stereo 影格 tick 一次，對應 `GrabStereoFeatures` → `Track()`。`calib`、`params`、`mapper`、`vocabulary` 是 `latest`。
 - **感測器由 `params.sensor` 決定**（`stereo` 或 `stereo_inertial`）。`make_frame` 依它寫入鍵 `inertial`，並檢查 `frame.imu` 是否存在：stereo-inertial 卻沒有預積分時回報錯誤。只做 stereo 時，圖上把 `orb_matcher.stereo` 直接接到 `tracking.frame`，拿掉 `imu_preintegration`。
 - **`orb_matcher` 多一個輸出 `stereo`**（`orb/StereoFrame`）：兩眼的 keypoint、描述子、`scale_factors` 與配對結果（`orb::Match` 的內容），**不含金字塔**。`Frame` 需要左右兩眼的特徵（KB8 stereo 的 `N = Nleft + Nright`），由 matcher 一次送出，tracking 就不必 sync 三路資料，也不會因為排隊而持有 extractor 的 GPU 金字塔 buffer。原本的 `match` 輸出保留。
 - **`imu_preintegration`**（新的 algorithm，class 形式）。詳見[IMU 預積分](#imu-預積分)。
@@ -146,7 +147,7 @@ ORB-SLAM3 在 tracking 的執行緒內做 `PreintegrateIMU`：從佇列取出上
 | **埠**（不可變的訊息） | stereo 影格與它的預積分、calib、params、位姿、狀態、keyframe 事件 | 單向流動、產生後不再修改 |
 | **資源 `atlas`**（`map/Atlas`，write） | 所有地圖、keyframe、map point、相機模型；加上 BoW 反向索引（ORB-SLAM3 的 `KeyFrameDatabase`） | 之後 local mapping、loop closing 都要修改它，必須是共享資源。KeyFrameDatabase 跟著 keyframe 一起新增刪除，放在同一個鎖之下 |
 | **資源 `tracker`**（`tracking/Tracker`，write） | `Tracking` 除了 `mState` 以外的成員：`mCurrentFrame`、`mLastFrame`、速度模型、reference keyframe 與上一個 keyframe 的 id、local map（keyframe id 與 point id 的清單）、temporal points、IMU 的 calib／從上一個 keyframe 起算的預積分／`mLastBias`、`mnLastRelocFrameId`、`mTimeStampLost`、相機與 `mTlr`、軌跡清單（`mlRelativeFramePoses` 等）、待執行的重設要求 | 樹的每個葉節點是獨立的物件，彼此之間共用狀態只能經由鍵或資源。這些成員很大（兩個 `Frame`），且每次都要和 `atlas` 一起讀寫，放在鍵上會一直複製 |
-| **資源 `vocabulary`**（`map/Vocabulary`，read） | ORB 詞彙樹（與 DBoW2 的 ORBvoc 同一份資料） | 很大、唯讀、之後 loop closing 也要用。`store:` 在啟動時載入；`fw_save` 不做事，不會寫回 |
+| **輸入 `vocabulary`**（`map/Vocabulary`，latest） | ORB 詞彙樹（與 DBoW2 的 ORBvoc 同一份資料） | 很大、唯讀、之後 loop closing 也要用。由 `orb_vocabulary://` plugin（[`filesystem/plugins/orb_vocabulary.cpp`](../../../filesystem/plugins/orb_vocabulary.cpp)）在啟動時載入一次，以 `GUARANTEED` 送出；同一個 box 內各讀取者共用同一份，不複製。不用資源的 `store:`，因為它在結束時一定會存回檔案 |
 | **鍵**（blackboard） | `state`（`tracking/State`）、`inertial`、`ok`（`bOK`，只在 `track` 子樹內） | 決定樹的分支，樹檔中看得到，執行時在樹分頁的 Keys 面板上可以觀察 |
 
 **鎖的範圍**：tracking 只在 `sync_atlas` 讀取 `atlas`（O(1) 複製 tile 共用的副本），其餘時間不持有它；`atlas` 是 `policy: versioned`，所以這一次也不必等寫入者。ORB-SLAM3 是在 `Track()` 中持有 `mMutexMapUpdate`。之後的 local BA 與 loop closing 依[鎖外計算](../../../docs/concepts/resources.md#長時間運算鎖外計算)的方式，只在複製與寫回時短暫持有 `atlas`，與 ORB-SLAM3 相同。
@@ -234,7 +235,7 @@ estimate_pose        （SUCCESS = 初始位姿估計的 bOK）                  
 
 ## 葉節點
 
-全部是函式形式的 condition 或 action，不需要 stateful action，因為每個步驟都在一個 tick 內完成，ORB-SLAM3 的 tracking 本來就是同步的。`atlas`、`tracker`、`vocabulary` 在樹檔中不寫，依同名規則接到樹的資源。只有 `sync_atlas` 使用 `atlas` 資源；其餘葉節點讀寫的是 tracker 裡的副本 `tracker.view`，對地圖的修改以 `atlas_edits` 送給 local mapping。
+全部是函式形式的 condition 或 action，不需要 stateful action，因為每個步驟都在一個 tick 內完成，ORB-SLAM3 的 tracking 本來就是同步的。`atlas`、`tracker` 在樹檔中不寫，依同名規則接到樹的資源；`vocabulary` 是樹的輸入，要經由各層 SubTree 傳下去，葉節點寫 `vocabulary: "{vocabulary}"`。只有 `sync_atlas` 使用 `atlas` 資源；其餘葉節點讀寫的是 tracker 裡的副本 `tracker.view`，對地圖的修改以 `atlas_edits` 送給 local mapping。
 
 | 葉節點 | 種類 | 埠（鍵） | 資源 | 對應的 ORB-SLAM3 |
 |---|---|---|---|---|
@@ -252,12 +253,12 @@ estimate_pose        （SUCCESS = 初始位姿估計的 bOK）                  
 | `start_new_map` | action | `state` inout、`atlas_edits` out | tracker w | `Track()` 的 `else if (mState == LOST)` 分支 |
 | `check_replaced_in_last_frame` | action | | tracker w | `CheckReplacedInLastFrame` |
 | `use_reference_keyframe` | condition | | tracker r | `(!mbVelocity && !isImuInitialized) \|\| id < reloc + 2` |
-| `track_reference_keyframe` | action | | tracker w、vocabulary r | `TrackReferenceKeyFrame`（`ComputeBoW`、`SearchByBoW`、`PoseOptimization`） |
+| `track_reference_keyframe` | action | `vocabulary` | tracker w | `TrackReferenceKeyFrame`（`ComputeBoW`、`SearchByBoW`、`PoseOptimization`） |
 | `track_with_motion_model` | action | | tracker w | `UpdateLastFrame`、`TrackWithMotionModel` |
 | `lost_after_pose_failure` | action | `state` inout | tracker w | `if (!bOK)` 之後的 RECENTLY_LOST／LOST 判定 |
 | `lost_time_within` | action | `state` inout、`max_s` 常值 | tracker r | `mTimeStamp - mTimeStampLost > …` → LOST |
 | `predict_state_imu` | action | | tracker w | `PredictStateIMU`（IMU 未初始化：FAILURE） |
-| `relocalize` | action | | tracker w、vocabulary r | `Relocalization`（KeyFrameDatabase、MLPnP） |
+| `relocalize` | action | `vocabulary` | tracker w | `Relocalization`（KeyFrameDatabase、MLPnP） |
 | `track_local_map` | action | `state`、`mapper` Optional | tracker w | `TrackLocalMap`（`UpdateLocalMap`、`SearchLocalPoints`、pose (inertial) optimization） |
 | `tracking_ok` | action | `state` inout、`ok` out | | `bOK` → `mState = OK` |
 | `track_failed` | action | `state` inout、`ok` out | tracker w | `else if (mState == OK)` 的 RECENTLY_LOST 與 inertial 重設要求 |
@@ -324,7 +325,7 @@ types/
   map/atlas_ops.hpp/.cpp         加觀測、covisibility、spanning tree、bad、Replace、法向與深度、
                                  代表描述子、建立 stereo 點                                         ~450
   map/bow_index.hpp/.cpp         keyframe 的 BoW 反向索引（只有索引）                              ~70
-  map/vocabulary.hpp/.cpp        詞彙樹、fw_load、transform、score                                ~350
+  map/vocabulary.hpp/.cpp        詞彙樹、loadBinary、transform、score                                ~350
   tracking/frame.hpp/.cpp        Frame：特徵、point id、outlier、位姿、IMU                         ~180
   tracking/tracker.hpp state.hpp status.hpp mapper_status.hpp mapper_command.hpp               ~200
 algorithms/
@@ -343,7 +344,7 @@ algorithms/
 params/orb_tracking_params.hpp   config/orb_tracking.yaml
 tools/orb_vocabulary/            ORBvoc.txt → .bin                                              ~150
 tests/fixtures/orb_slam3/        ORB-SLAM3 產生的標準答案（見下）
-data/orb_vocabulary/
+orb_vocabulary/                  orb_vocabulary:// 的資料夾
   ORBvoc.bin.tar.gz              進 git
   ORBvoc.bin                     解壓後的檔案，不進 git（.gitignore）；建置時若不存在就從壓縮檔解開
 graphs/tracking_job.graph.yaml
@@ -360,7 +361,7 @@ graphs/trees/tracking/*.tree.yaml
   - 只有 `Reset`（`clearAtlas`）會清空陣列，keyframe 的 id 從 0 重新編號（原版 `KeyFrame::nNextId = 0`）。map point 的 id 也跟著從 0 重新編號；原版不重設，但沒有邏輯依賴它。
 - **只支援 KB8 雙目**：每個 keyframe 都有兩台相機，所以每個觀測讓 `nObs` 加 1，不使用 `mvuRight` 的分支。
 - **查詢用的暫存不放在型別裡**：ORB-SLAM3 放在 `KeyFrame`、`MapPoint` 上的查詢暫存，例如 `mnRelocQuery`、`mnTrackReferenceForFrame`、`mTrackProjX`、`mbTrackInView`，由使用的葉節點自己保存。
-- **詞彙檔**：`data/orb_vocabulary/ORBvoc.bin.tar.gz` 由 `tools/orb_vocabulary` 從 ORBvoc.txt 轉出，與 reference 的 `ORBvoc.bin` 逐位元組相同。建置時若 `ORBvoc.bin` 不存在，就從壓縮檔解開。
+- **詞彙檔**：`orb_vocabulary/ORBvoc.bin.tar.gz` 由 `tools/orb_vocabulary` 從 ORBvoc.txt 轉出，與 reference 的 `ORBvoc.bin` 逐位元組相同。建置時若 `ORBvoc.bin` 不存在，就從壓縮檔解開。
 
 ### shared 的實作細節
 
@@ -422,7 +423,7 @@ graphs/trees/tracking/*.tree.yaml
 | `orb/StereoFrame` | `types/orb/stereo_frame.hpp` | 訊息，`orb_matcher` 送出。兩眼的 keypoint、描述子、`scale_factors`、配對結果；`imu`（`std::shared_ptr<const imu::Preintegrated>`），由 `imu_preintegration` 填入，stereo 時為空 |
 | `imu/Preintegrated` | `types/imu/preintegrated.hpp` | 線性化點 b̄、ΔR、ΔV、ΔP、共變異數、Jacobian、內插後的樣本；積分、修正、串接、`Reintegrate` |
 | `map/Atlas` | `types/map/atlas.hpp` | 資源。所有地圖、keyframe、map point、相機，與 BoW 反向索引 |
-| `map/Vocabulary` | `types/map/vocabulary.hpp` | 資源。ORB 詞彙樹；`fw_load` 讀 `.bin`，`fw_save` 不做事 |
+| `map/Vocabulary` | `types/map/vocabulary.hpp` | ORB 詞彙樹；`loadBinary` 讀 `.bin`，由 `orb_vocabulary://` plugin 送出 |
 | `map/KeyFrameRef` | `types/map/keyframe_ref.hpp` | 訊息。`map_id`、`keyframe_id` |
 | `tracking/Tracker` | `types/tracking/tracker.hpp` | 資源。見[資料放在哪裡](#資料放在哪裡) |
 | `tracking/State` | `types/tracking/state.hpp` | `FW_ENUM`：`NO_IMAGES_YET`、`NOT_INITIALIZED`、`OK`、`RECENTLY_LOST`、`LOST`（`SYSTEM_NOT_READY` 與 `OK_KLT` 在 ORB-SLAM3 中沒有使用，不列入） |

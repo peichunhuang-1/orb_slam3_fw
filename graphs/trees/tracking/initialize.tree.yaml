@@ -5,7 +5,6 @@ outputs:
   atlas_edits: { type: tracking/AtlasEdits }
 resources:   # the parent's of the same name
   tracker:    { type: tracking/Tracker }
-  vocabulary: { type: map/Vocabulary }
 root:
   Fallback:
     children:

@@ -255,8 +255,4 @@ bool Vocabulary::sameAs(const Vocabulary& o, std::string* why) const {
     return true;
 }
 
-void fw_load(Vocabulary& v, const std::filesystem::path& file) { v.loadBinary(file); }
-
-void fw_save(const Vocabulary&, const std::filesystem::path&) {}
-
 }  // namespace map

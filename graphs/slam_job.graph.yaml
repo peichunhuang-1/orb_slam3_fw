@@ -13,7 +13,6 @@ boxes:
       atlas:        { type: map/Atlas, policy: versioned }   # written by local mapping; tracking reads it without waiting
       tracker:      { type: tracking/Tracker }             # the tracking tree's own state
       local_mapper: { type: local_mapping/LocalMapper }    # the local mapping tree's own state
-      vocabulary:   { type: map/Vocabulary, store: "data://orb_vocabulary/ORBvoc.bin" }   # loaded at start, never saved
     blocks:
       euroc_mcap_driver:   { driver: euroc_mcap_driver }
       orb_extractor_left:  { algorithm: OrbExtractor }
@@ -48,7 +47,7 @@ edges:
   - atlas -> [tracking.atlas, local_mapping.atlas]
   - tracker -> tracking.tracker
   - local_mapper -> local_mapping.local_mapper
-  - vocabulary -> [tracking.vocabulary, local_mapping.vocabulary]
+  - orb_vocabulary://ORBvoc.bin -> [tracking.vocabulary, local_mapping.vocabulary]
 taps:
   - { output: tracking.pose, record: true }
   - { output: tracking.map_to_odom, record: true }

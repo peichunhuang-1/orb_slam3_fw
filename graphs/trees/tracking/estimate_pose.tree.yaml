@@ -2,11 +2,11 @@
 version: 1
 inputs:
   inertial: { type: fw/bool }
+  vocabulary: { type: map/Vocabulary }
 outputs:
   state: { type: tracking/State }
 resources:   # the parent's of the same name
   tracker:    { type: tracking/Tracker }
-  vocabulary: { type: map/Vocabulary }
 root:
   IfThenElse:
     children:
@@ -21,11 +21,11 @@ root:
                       children:
                         # no velocity and no IMU initialization, or just relocalized
                         - use_reference_keyframe: {}
-                        - track_reference_keyframe: {}
+                        - track_reference_keyframe: { vocabulary: "{vocabulary}" }
                         - Fallback:
                             children:
                               - track_with_motion_model: {}
-                              - track_reference_keyframe: {}
+                              - track_reference_keyframe: { vocabulary: "{vocabulary}" }
             # OK -> RECENTLY_LOST (> 10 keyframes) or LOST; the estimate stays failed
             - ForceFailure:
                 child: { lost_after_pose_failure: { state: "{state}" } }
@@ -41,6 +41,6 @@ root:
             # stereo: relocalize; failing for over 3 s -> LOST
             - Fallback:
                 children:
-                  - relocalize: {}
+                  - relocalize: { vocabulary: "{vocabulary}" }
                   - ForceFailure:
                       child: { lost_time_within: { state: "{state}", max_s: 3.0 } }

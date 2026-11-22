@@ -7,6 +7,7 @@ inputs:
   calib:  { type: calib/StereoImuRig }              # latest
   params: { type: OrbTrackingParams }               # latest
   mapper: { type: tracking/MapperStatus }           # latest; local_mapping (not there yet: absent)
+  vocabulary: { type: map/Vocabulary }             # latest; DBoW2 ORB vocabulary (orb_vocabulary:// plugin)
 outputs:
   pose:        { type: fw/PoseStamped }             # body in odom (continuous), per tracked frame
   map_to_odom: { type: fw/TransformStamped }        # map (the atlas's world, re-anchored) -> odom, with each pose
@@ -16,7 +17,6 @@ outputs:
 resources:
   atlas:      { type: map/Atlas }                   # read only (sync_atlas): maps, keyframes, points, rigs, BoW index
   tracker:    { type: tracking/Tracker }            # Tracking's members (frames, motion model, local map, IMU)
-  vocabulary: { type: map/Vocabulary }              # DBoW2 ORB vocabulary, read only
 blackboard:
   state:    { type: tracking/State, init: NO_IMAGES_YET }   # Tracking::mState
   inertial: { type: fw/bool, init: false }                  # System::IMU_STEREO, set by make_frame from params.sensor
@@ -35,7 +35,7 @@ root:
           children:
             - frame_discontinuity: { state: "{state}", mapper: "{mapper}" }
             - handle_discontinuity: { state: "{state}", mapper: "{mapper}", atlas_edits: "{atlas_edits}" }
-            - SubTree: { tree: trees/tracking/track_frame.tree.yaml, name: track_frame, inertial: "{inertial}",
+            - SubTree: { tree: trees/tracking/track_frame.tree.yaml, name: track_frame, inertial: "{inertial}", vocabulary: "{vocabulary}",
                          params: "{params}", mapper: "{mapper}", state: "{state}", pose: "{pose}",
                          map_to_odom: "{map_to_odom}", tracking: "{tracking}", atlas_edits: "{atlas_edits}",
                          mapper_cmd: "{mapper_cmd}" }

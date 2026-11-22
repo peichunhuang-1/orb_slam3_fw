@@ -1,5 +1,5 @@
 #pragma once
-// The ORB vocabulary tree (resource type "map/Vocabulary"): DBoW2's TemplatedVocabulary<FORB> as ORB-SLAM3 uses
+// The ORB vocabulary tree (type "map/Vocabulary"): DBoW2's TemplatedVocabulary<FORB> as ORB-SLAM3 uses
 // it, reduced to what tracking needs (and later loop closing): load, transform a frame's descriptors into a
 // BowVector and a FeatureVector, and the L1 score of two BowVectors.
 //
@@ -8,8 +8,8 @@
 // added up per word, and the vector is normalized to L1 norm 1.
 //
 // Files: the binary format of ORB-SLAM3's tools/orb_vocabulary ("DBoW2BIN", version 1; loadBinary), and DBoW2's
-// text format (ORBvoc.txt; loadText), which tools/orb_vocabulary converts. As a resource it is loaded from its
-// `store:` (the binary file) and never written back.
+// text format (ORBvoc.txt; loadText), which tools/orb_vocabulary converts. In a graph it comes from the
+// orb_vocabulary:// plugin (filesystem/plugins/orb_vocabulary.cpp), which loads the binary file once.
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -83,10 +83,6 @@ private:
     std::vector<NodeId> words_;             // word id -> node
     static constexpr WordId kNoWord = 0xffffffffu;
 };
-
-// Resource store: loaded from the binary file; a vocabulary is never written back
-void fw_load(Vocabulary& v, const std::filesystem::path& file);
-void fw_save(const Vocabulary& v, const std::filesystem::path& file);
 
 }  // namespace map
 

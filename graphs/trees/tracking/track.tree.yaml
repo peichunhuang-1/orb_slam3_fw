@@ -5,6 +5,7 @@ inputs:
   inertial: { type: fw/bool }
   params:   { type: OrbTrackingParams }
   mapper:   { type: tracking/MapperStatus }
+  vocabulary: { type: map/Vocabulary }
 outputs:
   state:      { type: tracking/State }
   atlas_edits: { type: tracking/AtlasEdits }
@@ -13,7 +14,6 @@ blackboard:
   ok: { type: fw/bool, init: false }    # Track()'s bOK
 resources:   # the parent's of the same name
   tracker:    { type: tracking/Tracker }
-  vocabulary: { type: map/Vocabulary }
 root:
   IfThenElse:
     children:
@@ -28,7 +28,7 @@ root:
                   - Sequence:
                       children:
                         - SubTree: { tree: trees/tracking/estimate_pose.tree.yaml, name: estimate_pose,
-                                     inertial: "{inertial}", state: "{state}" }
+                                     inertial: "{inertial}", vocabulary: "{vocabulary}", state: "{state}" }
                         - track_local_map: { state: "{state}", mapper: "{mapper}" }
                         - tracking_ok: { state: "{state}", ok: "{ok}" }       # state = OK, bOK = true
                   # bOK = false; OK -> RECENTLY_LOST (inertial: reset when the IMU is not / recently initialized)
