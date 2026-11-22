@@ -123,9 +123,11 @@ tracking 的葉節點不再寫入 `atlas` 資源。做法（第 2 步，與原�
 
 原本規劃 tracker 只保留「已送出、快照裡還沒有」的 keyframe 和點，查詢時先查覆蓋層再查快照。改成「副本加重新套用」之後，所有查詢都不用改（照樣查 `view`），也不會漏掉某個查詢路徑；代價只是每幀重新套用幾筆未確認的 edit，通常是零到一筆。
 
-### 已知問題：job 模式不會結束
+### 已修正：job 模式不會結束
 
 fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者的 `trigger` 上游時，job 結束時收不到 EOS。tracking（讀 `atlas`）正是 local mapping（寫 `atlas`）的上游，所以 `slam_job` 跑完資料後不會自行結束，要手動停止。已回報 fw。繞過方式是把 `sync_atlas` 宣告為 `write`，但會失去 `versioned` 的好處（第 3 步），所以沒有採用。
+
+**fw 已修正（2026-11-22 確認）。** 重新 build 之後，V1_02 的 `slam_job` 在 `sync_atlas` 仍宣告為 `read` 的情況下，跑完資料後所有 block 都收到 EOS，約 86 秒自行結束（exit code 0），不需要 `timeout`。
 
 ## 步驟
 
@@ -147,7 +149,7 @@ fw 0.1.0 的 bug：行為樹 block 讀取某個資源、又在該資源寫入者
 ### 第 2 步的驗證
 
 - 14 個測試全部通過。
-- V1_02 的 slam job：與第 1 步的輸出逐行相同（1710 幀，324 個 keyframe、15669 個點）。跑完資料後不會自行結束（見上面的已知問題）；暫時把 `sync_atlas` 宣告為 `write` 時，約 93 秒自行結束。
+- V1_02 的 slam job：與第 1 步的輸出逐行相同（1710 幀，324 個 keyframe、15669 個點）。跑完資料後不會自行結束（當時的 fw bug，已修正，見上）；暫時把 `sync_atlas` 宣告為 `write` 時，約 93 秒自行結束。
 - tracking 的葉節點都不再宣告 `atlas` 資源，只有 `sync_atlas` 以 `read` 使用。
 
 ### 第 3 步的驗證

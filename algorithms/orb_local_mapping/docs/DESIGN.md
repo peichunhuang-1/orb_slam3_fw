@@ -38,7 +38,7 @@
 
 **加入 `LocalInertialBA` 之後的實跑**（同上，以暫時的追蹤輸出觀察，之後已移除）：IMU 初始化之前的 8 次是 `LocalBundleAdjustment`，之後 343 次全是 `LocalInertialBA`，全部通過收斂檢查（沒有 "FAIL LOCAL-INERTIAL BA"），整段沒有 reset。tracking 的 inlier 幾乎都超過 100，所以多半是 `bLarge`：視窗 25 個 keyframe、650–1,700 個點、4 次迭代，每次刪掉 30–120 個 outlier 觀測。在 Pi 5 上平均 45 ms、最多 69 ms。200 s 內跑到 keyframe 352。
 
-**整條軌跡的 ATE**（`fw launch` 之後 `python3 tools/ate.py --frame map`；`slam_job` 以 tap 錄下 `tracking.pose`、`tracking.map_to_odom` 與 bag 的 `groundtruth`，見 [`tools/ate.py`](../../../tools/ate.py)）：V1_02_medium 整段跑完（約 5.5 分鐘，lockstep 回放；job 不會自己結束，見已知問題，用 `timeout -s INT 330`），1,620 個追蹤到的影格裡有 1,601 個配對到 ground truth。這裡是 atlas 座標系（`map`）裡的即時位姿，也就是原版的即時輸出；連續的 `odom` 輸出見 tracking 設計的[輸出的座標系](../../orb_tracking/docs/DESIGN.md#輸出的座標系odom-與-map)。以 SE3 對齊：
+**整條軌跡的 ATE**（`fw launch` 之後 `python3 tools/ate.py --frame map`；`slam_job` 以 tap 錄下 `tracking.pose`、`tracking.map_to_odom` 與 bag 的 `groundtruth`，見 [`tools/ate.py`](../../../tools/ate.py)）：V1_02_medium 整段跑完（約 5.5 分鐘，lockstep 回放；當時 job 不會自己結束，用 `timeout -s INT 330`；fw 已修正，現在會自行結束，見 [atlas 設計](../../../types/map/docs/DESIGN.md#已修正job-模式不會結束)），1,620 個追蹤到的影格裡有 1,601 個配對到 ground truth。這裡是 atlas 座標系（`map`）裡的即時位姿，也就是原版的即時輸出；連續的 `odom` 輸出見 tracking 設計的[輸出的座標系](../../orb_tracking/docs/DESIGN.md#輸出的座標系odom-與-map)。以 SE3 對齊：
 
 | 起點 | RMSE | 中位數 | 最大 |
 |---|---|---|---|
