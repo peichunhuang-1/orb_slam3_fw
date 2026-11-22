@@ -21,12 +21,12 @@ void updateFrameImu(const tracking::MapperStatus& mapper, tracking::Tracker& t);
 
 fw::bt::Status apply_mapper_update(fw::Optional<const tracking::MapperStatus&> mapper, fw::InOut<tracking::State>& state,
                                    fw::Write<tracking::Tracker> tracker) {
-    if (!mapper.has_value()) return fw::bt::Status::SUCCESS;
+    if (!mapper.has_value()) return fw::bt::Status::SUCCESS; // not yet update map, just pass
     tracking::Tracker& t = *tracker;
     if (mapper->imu_update_seq != 0 && mapper->imu_update_seq != t.applied_imu_update) updateFrameImu(*mapper, t);
     if (mapper->tracking_ok_seq != 0 && mapper->tracking_ok_seq != t.applied_tracking_ok) {
         t.applied_tracking_ok = mapper->tracking_ok_seq;
-        state.emplace(tracking::State::OK);
+        state.emplace(tracking::State::OK); // force ok, since after an IMU initialization, the tracking may be lost
     }
     return fw::bt::Status::SUCCESS;
 }
