@@ -8,5 +8,13 @@
   "workspaceFolder": "/workspaces/orb_slam3_fw",
   "remoteUser": "fw",
   "postStartCommand": "bash .devcontainer/gpu_access.sh",
-  "customizations": { "vscode": { "extensions": ["/usr/local/share/fw/fw-editor.vsix", "/usr/local/share/fw/fw-viewer.vsix"] } }
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "/usr/local/share/fw/fw-editor.vsix",
+        "/usr/local/share/fw/fw-viewer.vsix",
+        "anthropic.claude-code"
+      ]
+    }
+  }
 }
