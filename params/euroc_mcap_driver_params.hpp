@@ -19,7 +19,6 @@ struct EurocMcapParams {
     std::string tf_static_topic = "/tf_static";
     std::string groundtruth_topic = "/groundtruth/pose";
 
-    double imu_rate_hz = 200.0;
     double gyro_noise = 1.6968e-04;
     double gyro_walk = 1.9393e-05;
     double accel_noise = 2.0e-03;
@@ -40,7 +39,6 @@ FW_PARAMS(EurocMcapParams,
           FIELD(tf_static_topic, DEFAULT(std::string("/tf_static")), DESC("extrinsics body -> sensors (TFMessage)")),
           FIELD(groundtruth_topic, DEFAULT(std::string("/groundtruth/pose")), DESC("body pose in world (PoseStamped)"))),
     GROUP("imu_noise",
-          FIELD(imu_rate_hz, DEFAULT(200.0), RANGE(1.0, 10000.0), DESC("IMU rate")),
           FIELD(gyro_noise, DEFAULT(1.6968e-04), RANGE(0.0, 1.0), DESC("gyroscope noise density, rad/s/sqrt(Hz)")),
           FIELD(gyro_walk, DEFAULT(1.9393e-05), RANGE(0.0, 1.0), DESC("gyroscope random walk, rad/s^2/sqrt(Hz)")),
           FIELD(accel_noise, DEFAULT(2.0e-03), RANGE(0.0, 10.0), DESC("accelerometer noise density, m/s^2/sqrt(Hz)")),

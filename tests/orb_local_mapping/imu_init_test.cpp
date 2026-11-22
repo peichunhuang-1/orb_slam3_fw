@@ -49,8 +49,9 @@ void near(double err, double tol, const std::string& what, double* worst = nullp
 
 imu::Noise noise() {
     const fixture::File r("rig.txt");
-    const Eigen::MatrixXd& d = r["imu_calib_discrete"];
-    return imu::Noise::fromDiscrete(float(d(0)), float(d(1)), float(d(2)), float(d(3)));
+    const Eigen::MatrixXd& d = r["imu_noise_density"];
+    // discretized at the rig's rate for every step, as the original (not at each step's dt as the pipeline)
+    return imu::Noise::fromDensities(float(d(0)), float(d(1)), float(d(2)), float(d(3))).atFixedRate(r.scalar("imu_hz"));
 }
 
 imu::Bias biasOf(const Eigen::MatrixXd& v) {

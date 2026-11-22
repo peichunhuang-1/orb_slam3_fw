@@ -5,20 +5,31 @@
 //
 //   imu        : fw::Imu (trigger), from euroc_mcap_driver: the raw samples, in the IMU frame
 //   frame      : orb::StereoFrame (trigger), from orb_matcher.stereo
-//   calib      : calib::StereoImuRig (latest): the IMU noise (continuous densities and rate, as ORB-SLAM3's
-//                IMU.NoiseGyro etc.)
+//   calib      : calib::StereoImuRig (latest): the IMU noise (continuous densities, as ORB-SLAM3's
+//                IMU.NoiseGyro etc.). No IMU rate: each step's dt comes from the sample timestamps, and the
+//                noise is discretized at it (types/imu/preintegrated.hpp)
 //   frame_imu  : orb::StereoFrame, stamp of the frame: the frame with `imu` set
 //
-// A frame waits until a sample at or after its time − 1 ms has arrived (the sample that ends PreintegrateIMU's
-// selection), then the measurements between the previous frame and it are taken and interpolated as there
-// (interval.hpp) and integrated at zero bias. Then:
+// A frame waits until a sample at or after its time has arrived, then the samples spanning the previous frame
+// to it are taken, interpolated to the two frame times (interval.hpp) and integrated at zero bias. Only the
+// timestamps decide; no IMU rate or period is assumed. Then:
 //   first frame                          sent without `imu` (PreintegrateIMU's "non prev frame")
-//   no sample in between (one step or less)  sent without `imu`
+//   no sample on one side of the interval  sent without `imu`
 //   a frame older than the previous one  the samples are dropped and it starts over as a first frame (Track()'s
 //                                        mlQueueImuData.clear() when the time goes back)
 //   end of the data                      a frame still waiting is integrated with the samples there are
 // One frame is sent per call (an output sends at most one message per call); frames that became ready
-// together go out on the next samples.
+// together go out on the next samples, and at the end of the data only the first waiting one goes out (the
+// rest are counted in the summary).
+//
+// Health (reported on change; the worst condition wins):
+//   error     IMU stalled: more than kMaxPending frames waiting for a sample after them; the oldest is dropped
+//             (not sent without `imu`, which would leave a hole in tracking's preintegration from the keyframe)
+//   error     IMU gap: two consecutive samples more than kGapFactor × the median of the last kGapWindow sample
+//             intervals apart (lost samples: the step over it is interpolated, so the preintegration is wrong)
+//   degraded  the time went back (the frames waiting then are dropped), or a frame sent without `imu`
+//   ok        again at the first frame integrated from samples after all of the above
+#include <algorithm>
 #include <cstdio>
 #include <deque>
 #include <memory>
@@ -36,6 +47,11 @@ namespace {
 
 using imu_preintegration::Sample;
 
+constexpr std::size_t kMaxPending = 16;  // frames (as the frame input's queue)
+constexpr double kGapFactor = 3.0;       // × the median sample interval
+constexpr std::size_t kGapWindow = 64;   // sample intervals for the median
+constexpr std::size_t kGapMinIntervals = 8;  // before this many, no gap check
+
 double seconds(fw::Time t) { return double(t.ns) * 1e-9; }
 
 class ImuPreintegration {
@@ -45,10 +61,13 @@ public:
         s.t = seconds(m.stamp());
         s.a = Eigen::Vector3f(float(m->linear_acceleration.x), float(m->linear_acceleration.y), float(m->linear_acceleration.z));
         s.w = Eigen::Vector3f(float(m->angular_velocity.x), float(m->angular_velocity.y), float(m->angular_velocity.z));
-        if (!samples_.empty() && s.t <= samples_.back().t) {
+        if (have_last_ && s.t <= last_t_) {
             ++out_of_order_;
             return;
         }
+        if (have_last_) check_gap(ctx, s.t - last_t_, s.t);
+        last_t_ = s.t;
+        have_last_ = true;
         samples_.push_back(s);
         ++n_samples_;
         try_send(ctx, out, false);
@@ -56,21 +75,31 @@ public:
 
     void on_frame(fw::Context& ctx, fw::Msg<orb::StereoFrame> f, const calib::StereoImuRig& cal,
                   fw::Optional<fw::Msg<orb::StereoFrame>>& out) {
-        if (cal.imu.rate_hz <= 0) {
-            ctx.report(fw::Health::error, "calib: no IMU rate (imu.rate_hz)");
-            throw std::invalid_argument("imu_preintegration: calib has no IMU rate");
-        }
         noise_ = imu::Noise::fromContinuous(cal.imu);
         const double t = seconds(f.stamp());
         const double last = pending_.empty() ? (have_prev_ ? t_prev_ : -1e300) : seconds(pending_.back().stamp());
         if (t < last) {
             // the time went back: start over from this frame
+            dropped_restart_ += long(pending_.size());
             samples_.clear();
             pending_.clear();
-            have_prev_ = false;
+            intervals_.clear();
+            have_prev_ = have_last_ = false;
+            gap_end_ = -1e300;
+            stalled_ = false;
             ++restarts_;
+            degraded_ = "the time went back: started over (" + std::to_string(dropped_restart_) +
+                        " waiting frames dropped so far)";
+            update_health(ctx); // health enter degarded
         }
         pending_.push_back(std::move(f));
+        if (pending_.size() > kMaxPending) {
+            // no sample after the oldest frame for a while: the IMU stalled
+            pending_.pop_front();
+            ++dropped_stalled_;
+            stalled_ = true;
+            update_health(ctx); // health enter error
+        }
         try_send(ctx, out, false);
     }
 
@@ -79,9 +108,10 @@ public:
         if (!pending_.empty())
             std::printf("imu_preintegration: %zu frames still waiting at the end of the data, not sent\n", pending_.size());
         std::printf("imu_preintegration: %ld frames (%ld with a preintegration, %.1f steps each), %ld samples, "
-                    "%ld out of order, %ld restarts\n",
+                    "%ld out of order, %ld gaps, %ld restarts (%ld frames dropped), %ld frames dropped waiting for "
+                    "the IMU\n",
                     sent_, integrated_, integrated_ ? double(steps_) / double(integrated_) : 0.0, n_samples_,
-                    out_of_order_, restarts_);
+                    out_of_order_, gaps_, restarts_, dropped_restart_, dropped_stalled_);
         std::fflush(stdout);
         (void)ctx;
     }
@@ -94,13 +124,13 @@ private:
         const double t_cur = seconds(f.stamp());
         if (!have_prev_) {
             drop_before(t_cur);
-            send(out, f, nullptr);
+            send(out, f, nullptr);  // a first frame: nothing to integrate, not a fault
             t_prev_ = t_cur;
             have_prev_ = true;
             pending_.pop_front();
             return;
         }
-        if (!eos && (samples_.empty() || samples_.back().t < t_cur - imu_preintegration::kImuPeriod)) return;
+        if (!eos && (samples_.empty() || samples_.back().t < t_cur)) return;
 
         const imu_preintegration::Interval iv = imu_preintegration::intervalMeasurements(samples_, t_prev_, t_cur);
         samples_.erase(samples_.begin(), samples_.begin() + long(iv.consumed));
@@ -110,17 +140,18 @@ private:
             for (const imu::Measurement& m : iv.steps) p->integrate(m);
             ++integrated_;
             steps_ += long(iv.steps.size());
-            if (health_ != fw::Health::ok) {
-                health_ = fw::Health::ok;
-                ctx.report(health_, "ok");
+            stalled_ = false;
+            if (t_prev_ >= gap_end_) {  // integrated from samples after any gap: all clear
+                gap_end_ = -1e300;
+                degraded_.clear();
             }
-        } else if (health_ != fw::Health::degraded) {
-            health_ = fw::Health::degraded;
-            ctx.report(health_, "no IMU samples between two frames: frame sent without a preintegration");
+        } else {
+            degraded_ = "no IMU sample on one side of a frame interval: frame sent without a preintegration";
         }
         send(out, f, std::move(p));
         t_prev_ = t_cur;
         pending_.pop_front();
+        update_health(ctx);
     }
 
     void send(fw::Optional<fw::Msg<orb::StereoFrame>>& out, const fw::Msg<orb::StereoFrame>& f,
@@ -131,11 +162,52 @@ private:
         ++sent_;
     }
 
-    // Samples before the first frame are of no use (the next interval starts at it)
+    // A sample interval far above the usual one: samples were lost
+    void check_gap(fw::Context& ctx, double dt, double t) {
+        if (intervals_.size() >= kGapMinIntervals) {
+            std::vector<double> v(intervals_.begin(), intervals_.end());
+            std::nth_element(v.begin(), v.begin() + long(v.size() / 2), v.end());
+            const double median = v[v.size() / 2];
+            if (dt > kGapFactor * median) {
+                ++gaps_;
+                gap_end_ = t;
+                gap_ = "IMU gap: " + std::to_string(dt * 1e3) + " ms between samples (usually " +
+                       std::to_string(median * 1e3) + " ms) at t = " + std::to_string(t) + " s; " +
+                       std::to_string(gaps_) + " gaps so far";
+                update_health(ctx); // health enter error
+                return;  // not in the median
+            }
+        }
+        intervals_.push_back(dt);
+        if (intervals_.size() > kGapWindow) intervals_.pop_front();
+    }
+
+    // Reports the worst current condition when it changes
+    void update_health(fw::Context& ctx) {
+        fw::Health h = fw::Health::ok;
+        std::string why = "ok";
+        if (stalled_) {
+            h = fw::Health::error;
+            why = "IMU stalled: no sample after the frames for more than " + std::to_string(kMaxPending) +
+                  " frames; dropping the oldest (" + std::to_string(dropped_stalled_) + " so far)";
+        } else if (gap_end_ > -1e300) {
+            h = fw::Health::error;
+            why = gap_;
+        } else if (!degraded_.empty()) {
+            h = fw::Health::degraded;
+            why = degraded_;
+        }
+        if (h == health_ && why == why_) return;
+        if (h == health_ && h == fw::Health::error && stalled_ && why_.rfind("IMU stalled", 0) == 0) return;  // counts only
+        health_ = h;
+        why_ = why;
+        ctx.report(h, why);
+    }
+
+    // Samples before the last one at or before the first frame are of no use (the next interval starts there)
     void drop_before(double t) {
-        std::size_t k = 0;
-        while (k < samples_.size() && samples_[k].t < t - imu_preintegration::kImuPeriod) ++k;
-        samples_.erase(samples_.begin(), samples_.begin() + long(k));
+        if (samples_.empty()) return;
+        samples_.erase(samples_.begin(), samples_.begin() + long(imu_preintegration::lastAtOrBefore(samples_, t)));
     }
 
     std::vector<Sample> samples_;                    // the queue, ascending in t
@@ -143,8 +215,19 @@ private:
     imu::Noise noise_;
     bool have_prev_ = false;
     double t_prev_ = 0;
+    bool have_last_ = false;  // the last sample accepted (order and gap checks)
+    double last_t_ = 0;
+    std::deque<double> intervals_;  // the last sample intervals, gaps left out
+
+    // Health conditions
+    bool stalled_ = false;
+    double gap_end_ = -1e300;  // the sample after the last gap (none: -1e300)
+    std::string gap_, degraded_;
     fw::Health health_ = fw::Health::ok;
+    std::string why_ = "ok";
+
     long sent_ = 0, integrated_ = 0, steps_ = 0, n_samples_ = 0, out_of_order_ = 0, restarts_ = 0;
+    long gaps_ = 0, dropped_restart_ = 0, dropped_stalled_ = 0;
 };
 
 }  // namespace

@@ -31,9 +31,9 @@ struct PinholeCamera {
     }
 };
 
-// Continuous-time IMU noise (Kalibr / ORB-SLAM3 convention)
+// Continuous-time IMU noise (Kalibr / ORB-SLAM3 convention). No rate: the preintegration discretizes it at
+// each step's dt, from the sample timestamps (types/imu/preintegrated.hpp).
 struct ImuNoise {
-    double rate_hz = 0;
     double gyro_noise = 0;   // rad / s / sqrt(Hz)
     double gyro_walk = 0;    // rad / s^2 / sqrt(Hz)
     double accel_noise = 0;  // m / s^2 / sqrt(Hz)

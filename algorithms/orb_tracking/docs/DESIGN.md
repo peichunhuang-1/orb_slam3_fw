@@ -116,9 +116,9 @@ tracker.odom 存：T_map_odom（初值 I）、上一個送出的影格（位姿�
 
 ORB-SLAM3 在 tracking 的執行緒內做 `PreintegrateIMU`：從佇列取出上一影格到這一影格之間的樣本，在兩端內插，然後積分兩次。一次是以 `mLastFrame` 的 bias 為線性化點、從上一影格起算；另一次累加到「從上一個 keyframe 起算」的預積分。這裡把積分移到上游的 block，tracking 只用 bias 的 Jacobian 修正：
 
-**`imu_preintegration`**：`ON(imu)` 累積樣本；`ON(frame)` 收到 `orb/StereoFrame` 後，等到有一筆時間 ≥ 影格時間 − 1 ms 的樣本（`PreintegrateIMU` 停止選取的那一筆），就做 `PreintegrateIMU` 的端點內插與積分。積分的**線性化點固定在 b̄ = 0**，得到 ΔR、ΔV、ΔP、共變異數與 Jacobian（`JRg`、`JVg`、`JVa`、`JPg`、`JPa`）。結果放進影格的 `imu` 欄位，以 `fw::make_msg(影格, 影格的時間)` 送出，時間戳記與影格相同。
+**`imu_preintegration`**：`ON(imu)` 累積樣本；`ON(frame)` 收到 `orb/StereoFrame` 後，等到有一筆時間 ≥ 影格時間的樣本，就取跨越上一影格到這一影格的樣本，兩端內插到影格時間後積分（只看時間戳記；`PreintegrateIMU` 用的是固定 1 ms 的 `mImuPer`，影格落在樣本上時兩者相同）。積分的**線性化點固定在 b̄ = 0**，得到 ΔR、ΔV、ΔP、共變異數與 Jacobian（`JRg`、`JVg`、`JVa`、`JPg`、`JPa`）。結果放進影格的 `imu` 欄位，以 `fw::make_msg(影格, 影格的時間)` 送出，時間戳記與影格相同。
 
-- IMU 雜訊與 `T_b_c1` 取自 `calib`（與 ORB-SLAM3 的 `IMU::Calib` 相同）。
+- IMU 雜訊與 `T_b_c1` 取自 `calib`。雜訊是連續時間密度，以每一步的 dt（取自樣本時間戳記）離散化，不用設定的 IMU 頻率；每步都是 1/f 時與 ORB-SLAM3 的 `IMU::Calib` 相同（[imu_preintegration/README.md](../../imu_preintegration/README.md)）。
 - 第一個影格沒有上一影格，`imu` 留空，對應 `PreintegrateIMU` 的「non prev frame」。
 - 影格的時間比上一個早時清掉累積的樣本，從這個影格重新起算，對應 `Track()` 遇到時間倒退時的 `mlQueueImuData.clear()`。
 - 資料結束時，還在等待 IMU 的影格以已有的樣本積分後送出。

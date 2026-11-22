@@ -207,7 +207,6 @@ Calibration read_calibration(mcap::McapReader& reader, const EurocMcapParams& p)
     rig.T_body_right = extrinsic(rig.right.frame_id);
     rig.T_body_imu = extrinsic(rig.imu_frame);
 
-    rig.imu.rate_hz = p.imu_rate_hz;
     rig.imu.gyro_noise = p.gyro_noise;
     rig.imu.gyro_walk = p.gyro_walk;
     rig.imu.accel_noise = p.accel_noise;

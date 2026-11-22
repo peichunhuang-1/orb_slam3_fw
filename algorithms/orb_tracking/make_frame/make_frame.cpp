@@ -24,7 +24,7 @@ bool sameCamera(const calib::PinholeCamera& a, const calib::PinholeCamera& b) {
 bool sameCalib(const calib::StereoImuRig& a, const calib::StereoImuRig& b) {
     return sameCamera(a.left, b.left) && sameCamera(a.right, b.right) &&
            a.T_body_left.matrix() == b.T_body_left.matrix() && a.T_body_right.matrix() == b.T_body_right.matrix() &&
-           a.T_body_imu.matrix() == b.T_body_imu.matrix() && a.imu.rate_hz == b.imu.rate_hz &&
+           a.T_body_imu.matrix() == b.T_body_imu.matrix() &&
            a.imu.gyro_noise == b.imu.gyro_noise && a.imu.gyro_walk == b.imu.gyro_walk &&
            a.imu.accel_noise == b.imu.accel_noise && a.imu.accel_walk == b.imu.accel_walk;
 }

@@ -1,6 +1,7 @@
 // handle_discontinuity: what Tracking::Track() does on the discontinuities of frame_discontinuity, before it
 // returns: bad IMU -> reset the active map; timestamp back -> new map (the IMU queue is cleared upstream, by
-// imu_preintegration); jump in an inertial map -> reset the active map, or a new map once inertial BA2 is done.
+// imu_preintegration); jump in an inertial map, or a frame without IMU data in the middle of a run -> reset the
+// active map, or a new map once inertial BA2 is done.
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 
 namespace {

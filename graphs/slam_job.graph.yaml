@@ -19,7 +19,7 @@ boxes:
       orb_extractor_left:  { algorithm: OrbExtractor }
       orb_extractor_right: { algorithm: OrbExtractor }
       orb_matcher:         { algorithm: OrbMatcher }
-      imu_preintegration:  { algorithm: ImuPreintegration }
+      imu_preintegration:  { algorithm: ImuPreintegration, on_error: stop_box }   # IMU stalled or a gap: the run is no good
       tracking:            { tree: trees/tracking/tracking.tree.yaml }
       local_mapping:       { tree: trees/local_mapping/local_mapping.tree.yaml }
       ba_solver:           { algorithm: BaSolver }         # no resource: the optimizations outside the lock

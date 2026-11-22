@@ -3,7 +3,7 @@
 // preintegration): ΔR, ΔV, ΔP at a linearization bias b̄, their Jacobians with respect to the bias, the
 // covariance, and the measurements, so it can be re-integrated at another bias.
 //
-// Same math as the original, in float as there:
+// Same math as the original, in float as there, except for the noise (below):
 //   integrate        IntegrateNewMeasurement (same update order; ΔR orthonormalized every step)
 //   setNewBias, updatedDelta*, delta*(b)
 //                    first-order bias correction: ΔR(b) = ΔR Exp(JRg δbg), ΔV(b) = ΔV + JVg δbg + JVa δba, ...
@@ -17,8 +17,11 @@
 //   Bias      g (gyro, rad/s), a (accelerometer, m/s²)
 //   C         15x15 covariance, order (rotation, velocity, position, gyro walk, acc walk); the rotation error
 //             is a right perturbation, ΔR_true = ΔR Exp(δφ)
-//   Noise     discrete: per-sample variances, as ORB-SLAM3's IMU::Calib (Tracking builds it from the
-//             continuous densities: noise·√rate, walk/√rate)
+//   Noise     continuous-time densities (Kalibr / EuRoC sensor.yaml), discretized per step from the step's
+//             own dt: measurement σ_d² = σ²/dt, bias walk σ_wd² = σ_w²·dt. ORB-SLAM3 discretizes once at a
+//             configured IMU rate f (IMU::Calib: σ·√f, σ_w/√f) and uses that for every step, including the
+//             shorter interpolated ones at the frame ends; here no rate is assumed, the sample timestamps give
+//             it. Equal to the original for every step with dt = 1/f.
 #include <vector>
 
 #include <Eigen/Core>
@@ -42,13 +45,26 @@ struct Measurement {
 };
 
 struct Noise {
-    Eigen::Matrix<float, 6, 6> cov = Eigen::Matrix<float, 6, 6>::Zero();       // (gyro, acc) measurement noise
-    Eigen::Matrix<float, 6, 6> cov_walk = Eigen::Matrix<float, 6, 6>::Zero();  // (gyro, acc) bias random walk
+    // Continuous-time densities σ per axis (gyro x y z, acc x y z)
+    Eigen::Matrix<float, 6, 1> density = Eigen::Matrix<float, 6, 1>::Zero();       // noise: rad/s/√Hz, m/s²/√Hz
+    Eigen::Matrix<float, 6, 1> walk_density = Eigen::Matrix<float, 6, 1>::Zero();  // bias walk: rad/s²/√Hz, m/s³/√Hz
 
-    // From discrete standard deviations (IMU::Calib's ng, na, ngw, naw)
-    static Noise fromDiscrete(float ng, float na, float ngw, float naw);
-    // From continuous densities at rate_hz, as ORB-SLAM3's Tracking: ng·√f, na·√f, ngw/√f, naw/√f
+    static Noise fromDensities(float ng, float na, float ngw, float naw);
     static Noise fromContinuous(const calib::ImuNoise& n);
+
+    // Discretized for one step of dt seconds: measurement σ²/dt, walk σ_w²·dt
+    Eigen::Matrix<float, 6, 6> measurementCov(float dt) const;
+    Eigen::Matrix<float, 6, 6> walkCov(float dt) const;
+
+    // ORB-SLAM3's discretization instead: every step at the rate hz whatever its dt, (σ·√f)² and (σ_w/√f)² in
+    // float as Tracking builds IMU::Calib. Only for comparing against the original (the golden tests); the
+    // pipeline discretizes at each step's dt.
+    Noise atFixedRate(double hz) const {
+        Noise n = *this;
+        n.fixed_hz = float(hz);
+        return n;
+    }
+    float fixed_hz = 0;  // 0: each step's own dt
 };
 
 class Preintegrated {

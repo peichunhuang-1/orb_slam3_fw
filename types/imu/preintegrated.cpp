@@ -20,17 +20,27 @@ Eigen::Matrix3f biasCorrection(const Eigen::Vector3f& w) {
 
 }  // namespace
 
-Noise Noise::fromDiscrete(float ng, float na, float ngw, float naw) {
+Noise Noise::fromDensities(float ng, float na, float ngw, float naw) {
     Noise n;
-    n.cov.diagonal() << ng * ng, ng * ng, ng * ng, na * na, na * na, na * na;
-    n.cov_walk.diagonal() << ngw * ngw, ngw * ngw, ngw * ngw, naw * naw, naw * naw, naw * naw;
+    n.density << ng, ng, ng, na, na, na;
+    n.walk_density << ngw, ngw, ngw, naw, naw, naw;
     return n;
 }
 
+Eigen::Matrix<float, 6, 6> Noise::measurementCov(float dt) const {
+    const Eigen::Matrix<float, 6, 1> s = fixed_hz > 0 ? Eigen::Matrix<float, 6, 1>(density * std::sqrt(fixed_hz))
+                                                      : Eigen::Matrix<float, 6, 1>(density / std::sqrt(dt));
+    return s.cwiseProduct(s).asDiagonal();
+}
+
+Eigen::Matrix<float, 6, 6> Noise::walkCov(float dt) const {
+    const Eigen::Matrix<float, 6, 1> s = fixed_hz > 0 ? Eigen::Matrix<float, 6, 1>(walk_density / std::sqrt(fixed_hz))
+                                                      : Eigen::Matrix<float, 6, 1>(walk_density * std::sqrt(dt));
+    return s.cwiseProduct(s).asDiagonal();
+}
+
 Noise Noise::fromContinuous(const calib::ImuNoise& c) {
-    const float sf = std::sqrt(float(c.rate_hz));
-    return fromDiscrete(float(c.gyro_noise) * sf, float(c.accel_noise) * sf, float(c.gyro_walk) / sf,
-                        float(c.accel_walk) / sf);
+    return fromDensities(float(c.gyro_noise), float(c.accel_noise), float(c.gyro_walk), float(c.accel_walk));
 }
 
 void Preintegrated::initialize(const Bias& b) {
@@ -89,8 +99,12 @@ void Preintegrated::integrate(const Eigen::Vector3f& acceleration, const Eigen::
     A.block<3, 3>(0, 0) = dRi.transpose();
     B.block<3, 3>(0, 0) = Jr * dt;
 
-    C.block<9, 9>(0, 0) = A * C.block<9, 9>(0, 0) * A.transpose() + B * noise_.cov * B.transpose();
-    C.block<6, 6>(9, 9) += noise_.cov_walk;
+    // Noise discretized at this step's dt (a zero-length step adds none: B is zero)
+    C.block<9, 9>(0, 0) = A * C.block<9, 9>(0, 0) * A.transpose();
+    if (dt > 0) {
+        C.block<9, 9>(0, 0) += B * noise_.measurementCov(dt) * B.transpose();
+        C.block<6, 6>(9, 9) += noise_.walkCov(dt);
+    }
 
     JRg = dRi.transpose() * JRg - Jr * dt;
 
