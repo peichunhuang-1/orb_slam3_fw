@@ -1,7 +1,8 @@
 # Loop closing's changes to the map, run by local mapping once a stop is requested and the keyframe in hand is
-# done (algorithms/orb_loop_closing/docs/DESIGN.md, "local mapping 的樹"): for a loop EmptyQueue, then Stop;
-# CorrectLoop (RUNNING while ba_solver computes the essential graph) and the global BA it makes due, sent to
-# gba_solver; the write-back of a global BA gba_solver finished; Release.
+# done (algorithms/orb_loop_closing/docs/DESIGN.md, "local mapping 的樹"): for a loop or a merge EmptyQueue, then
+# Stop; CorrectLoop (RUNNING while ba_solver computes the essential graph) and the global BA it makes due, sent to
+# gba_solver; MergeMaps (RUNNING while ba_solver computes its optimizations); the write-back of a global BA
+# gba_solver finished; Release.
 version: 1
 inputs:
   ba_result:  { type: ba/Result }
@@ -9,6 +10,7 @@ inputs:
 outputs:
   ba_problem:  { type: ba/Problem }
   gba_problem: { type: ba/Problem }
+  mapper:      { type: tracking/MapperStatus }
 resources:   # the parent's of the same name
   atlas:        { type: map/Atlas }
   local_mapper: { type: local_mapping/LocalMapper }
@@ -20,7 +22,10 @@ root:
           child:
             Sequence:
               children:
-                - is_loop_pending: {}
+                - Fallback:
+                    children:
+                      - is_loop_pending: {}
+                      - is_merge_pending: {}
                 - empty_queue: { vocabulary: "{vocabulary}" }
       - stop_mapping: {}
       - ForceSuccess:
@@ -29,6 +34,12 @@ root:
               children:
                 - is_loop_pending: {}
                 - CorrectLoop: { name: correct_loop, ba_result: "{ba_result}", ba_problem: "{ba_problem}" }
+      - ForceSuccess:
+          child:
+            Sequence:
+              children:
+                - is_merge_pending: {}
+                - MergeMaps: { name: merge_maps, ba_result: "{ba_result}", ba_problem: "{ba_problem}", mapper: "{mapper}" }
       - start_global_ba: { gba_problem: "{gba_problem}" }
       - apply_global_ba: {}
       - release_stop: {}

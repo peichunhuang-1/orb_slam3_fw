@@ -541,6 +541,52 @@ edges. A point seen only in right images, whose observations the right-index che
 edge and is written back unchanged. `FullInertialBA` leaves such a point out (`bAllFixed`), so there it follows its
 reference keyframe instead.
 
+**Inertial merge cases** (`merge_inertial`, `merge_inertial_bias`, generated 2026-11-23; for
+`tests/orb_loop_closing/merge_test.cpp`): `LoopClosing::MergeLocal2`, the stereo-inertial merge of pass B's map
+into pass A's. The scene differs from `merge` in these ways:
+- **Twelve pass B keyframes** (20 in all), because `MergeInertialBA` only runs with at least 10 keyframes in the
+  current map.
+- **Both passes on the trajectory itself:** A at 30.0–30.7 s, B over 29.8–30.9 s (its timestamps 60 s on), so
+  the IMU agrees with the poses.
+- **IMU state:** every keyframe is `bImu`, with a velocity, a bias near the truth, and its preintegration from
+  the previous keyframe. That preintegration is integrated from the trajectory's IMU samples at a bias near the
+  previous keyframe's (a pass's first keyframe has none).
+- **Map flags:** both maps are inertial, with the IMU initialized and BA1. A has BA2; B has it too, except in
+  `merge_inertial_bias`, where `MergeLocal2` first runs `InertialOptimization(pCurrentMap, bg, ba)`.
+- **Drift:** B's drift D is a yaw and a translation, since both maps are gravity aligned. `mSold_new` is D⁻¹
+  with a small error, and the matched keyframe is A's middle one (4).
+- **The local-BA mark:** the points of B's last three keyframes are marked as taken by the current keyframe's
+  last local BA (`mnBALocalForKF`), which `MergeInertialBA` reads.
+- **No right-only observations.** For each observation, `MergeInertialBA` reads the left feature, which is −1
+  for a right-only one. That is undefined: on a scene that has them, the cost is NaN from the first iteration,
+  every LM step is rejected and nothing moves. (The port leaves those observations out.)
+- **A spanning tree per pass**, built as SLAM grows it.
+- **Allocation order:** keyframes and points are allocated in one block each, so their addresses ascend with
+  their ids, the order the port uses.
+
+`MergeLocal2` is copied into the generator with the tracker's calls left out. There is no `Tracking` object:
+`UpdateFrameIMU` is tracking's, `GetLastKeyFrame` is the current keyframe, and the sensor is `IMU_STEREO`.
+
+- Extra inputs: `inertial`, `merge_inertial`, `ba2_current`, `parents`, `velocity`, `Tcb`; per keyframe
+  `kK_bias`, `kK_lin_bias`, `kK_meas`; `lba_points`; `merge_matched`, `merge_T_old_new`, `merge_last_kf`.
+- Outputs, per keyframe: `after_kK_Tcw`, `after_kK_points`, `after_kK_bias`, `after_kK_preint_bias`.
+- Outputs, overall: `after_parents`, `after_map`, `after_velocity`, `after_points` (x y z, bad, map),
+  `after_merge_connected` (`mvpMergeConnectedKFs`), `after_change_index`, `after_ba2`.
+
+The port runs `alignMergeInertial`, then (when there is no BA2) the `inertial_init` kind with the gravity fixed and
+`applyMergeBias`, then `joinMaps`, the `merge_inertial` kind and `applyMergeInertialBA`.
+- **Exact matches:** the problem (`merge_inertial`: 12 + 7 optimized keyframes, 1 fixed, 459 points, 8,067
+  observations), which map each keyframe and point is in, the spanning tree, `mvpMergeConnectedKFs`, the fused
+  points and the bad flags.
+- **Numeric agreement:**
+  - Poses match to 1e-4° and 2e-6 m.
+  - Velocities match to 1e-5 m/s.
+  - Biases: pass A's match to 2e-7. The current window's share one offset of 4e-5, while the BA moved them by up
+    to 0.13, after 8 LM iterations that stop short of convergence.
+
+The other `loop/` fixtures came out with float-level differences in normals and descriptors when regenerated.
+Those come from the original's containers keyed by pointer, which follow the heap layout. They were not replaced.
+
 **Reproducibility:** `Sim3Solver` samples with `rand()`, so its hypothesis, and everything downstream of it, varies
 from run to run (the original's `rand()` versus the port's `std::mt19937`). `OptimizeSim3` differentiates
 numerically through the KB8 projection's float internals, which makes its path chaotic. The test compares these

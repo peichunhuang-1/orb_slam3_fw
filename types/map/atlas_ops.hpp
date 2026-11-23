@@ -51,6 +51,10 @@ void setNotErase(Atlas& a, KeyFrameId kf);       // KeyFrame::SetNotErase
 // KeyFrame::SetErase: not_erase cleared unless it has loop edges; then SetBadFlag if culling asked for it meanwhile
 void setErase(Atlas& a, KeyFrameId kf);
 void addLoopEdge(Atlas& a, KeyFrameId kf, KeyFrameId other);  // KeyFrame::AddLoopEdge (also SetNotErase)
+void addMergeEdge(Atlas& a, KeyFrameId kf, KeyFrameId other);  // KeyFrame::AddMergeEdge (also SetNotErase)
+void eraseChild(Atlas& a, KeyFrameId kf, KeyFrameId child);    // KeyFrame::EraseChild
+// A map merge's moves: KeyFrame::UpdateMap(to), then to's AddKeyFrame and its old map's EraseKeyFrame
+void moveKeyFrame(Atlas& a, KeyFrameId kf, MapId to);
 int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs);  // good points (with >= min_obs if > 0)
 
 // ---- map points
@@ -63,6 +67,8 @@ void addObservation(Atlas& a, MapPointId p, KeyFrameId kf, int index);
 void eraseObservation(Atlas& a, MapPointId p, KeyFrameId kf);  // bad when 2 or fewer remain
 void eraseMapPointMatch(Atlas& a, KeyFrameId kf, MapPointId p);  // KeyFrame::EraseMapPointMatch(pMP): both views
 void setPointBad(Atlas& a, MapPointId p);                     // MapPoint::SetBadFlag
+// MapPoint::UpdateMap(to), then to's AddMapPoint and its old map's EraseMapPoint (a point in its map)
+void movePoint(Atlas& a, MapPointId p, MapId to);
 void replace(Atlas& a, MapPointId p, MapPointId by);           // MapPoint::Replace
 void computeDistinctiveDescriptors(Atlas& a, MapPointId p);
 void updateNormalAndDepth(Atlas& a, MapPointId p);

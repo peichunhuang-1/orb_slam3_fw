@@ -32,14 +32,17 @@ struct KeyFrameScratch {
     imu::Bias bias_gba;
 };
 
-// A map point's scratch (MapPoint::mnBAGlobalForKF, mPosGBA)
+// A map point's scratch (MapPoint::mnBAGlobalForKF, mPosGBA; mnBALocalForKF: the keyframe of the last local BA
+// that took the point, which MergeInertialBA reads: a point already taken by the local BA of its pCurrKF is left
+// out of it)
 struct PointScratch {
     map::KeyFrameId ba_global_for = map::kNone;
+    map::KeyFrameId ba_local_for = map::kNone;
     Eigen::Vector3f pos_gba = Eigen::Vector3f::Zero();
 };
 
 // The optimization ba_solver is working on, and what writing it back needs
-enum class Waiting { none, local_ba, imu_init_inertial, imu_init_full, pose_graph };
+enum class Waiting { none, local_ba, imu_init_inertial, imu_init_full, pose_graph, merge_bias, merge_inertial };
 struct PendingOptimization {
     Waiting waiting = Waiting::none;
     std::uint64_t seq = 0;  // the problem's; a result with another one is dropped
@@ -68,6 +71,22 @@ struct PendingLoop {
     std::vector<map::KeyFrameId> vertices;
     std::vector<geometry::SE3d> vertex_poses;
     std::unordered_map<map::MapPointId, map::KeyFrameId> corrected_reference;
+};
+
+// A merge loop closing detected (LoopClosing::MergeLocal2, stereo-inertial), done once local mapping has stopped
+// (algorithms/orb_loop_closing/merge_maps/merge.hpp)
+struct PendingMerge {
+    bool pending = false;
+    std::uint64_t epoch = 0;                // reset_epoch when it was taken
+    map::KeyFrameId keyframe = map::kNone;  // mpCurrentKF
+    map::KeyFrameId matched_kf = map::kNone;  // mpMergeMatchedKF
+    geometry::SE3d T_old_new;               // mSold_new
+    std::vector<loop_closing::EraseFlag> erase_after;  // applied once merged
+    // While it runs: the two maps, the keyframe its BA is for (the tracker's last keyframe), the current map's
+    // keyframes before the merge (numKFnew)
+    map::MapId current_map = map::kNone, merge_map = map::kNone;
+    map::KeyFrameId last_kf = map::kNone;
+    std::size_t n_new = 0;
 };
 
 // Loop closing's global BA (LoopClosing::RunGlobalBundleAdjustment), solved on gba_solver in steps while local
@@ -139,8 +158,14 @@ struct LocalMapper {
     // Global BAs started, stopped by a later loop, written back, dropped at the write-back (a reset, the map gone,
     // the IMU initialized during a visual one)
     std::uint64_t gba_started = 0, gba_stopped = 0, gba_applied = 0, gba_dropped = 0;
+    // Merges not done (another loop or merge pending, the map changed since the detection, a keyframe gone bad or
+    // a reset meanwhile), done
+    std::uint64_t merges_busy = 0, merges_stale = 0, merges_gone = 0, merges_done = 0;
+    // mvpMergeConnectedKFs: LoopClosing's member, never cleared (MergeLocal2 appends and keeps the first 6)
+    std::vector<map::KeyFrameId> merge_connected_kfs;
 
     PendingLoop loop;
+    PendingMerge merge;
     PendingGlobalBA gba;
 };
 

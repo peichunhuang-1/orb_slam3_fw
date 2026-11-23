@@ -4,7 +4,8 @@
 //            before BA2 too little motion (< 2 cm while mTinit < 10) requests the active map's reset and sets
 //            mbBadImu; then LocalInertialBA (bLarge: tracking's last inliers > 100; bRecInit: BA2 not done yet).
 //            Otherwise LocalBundleAdjustment; no fixed keyframe: SUCCESS without optimizing, as the original.
-//            Windows and problems: local_ba.hpp. The problem is copied out and sent; RUNNING.
+//            Windows and problems: local_ba.hpp. The local points get mnBALocalForKF (local_mapper's point scratch,
+//            which MergeInertialBA reads). The problem is copied out and sent; RUNNING.
 //   running: the result with the problem's seq is written back by id (local_ba.hpp: the outlier observations
 //            erased, poses, velocities and biases, points; what went bad or left the map meanwhile skipped);
 //            a local_inertial result that is not ok (FAIL LOCAL-INERTIAL BA) writes nothing; SUCCESS. Other ticks
@@ -56,6 +57,11 @@ public:
             p = orb_local_mapping::localBAProblem(*atlas, m.current);
         }
         if (!p) return Status::SUCCESS;
+        // mnBALocalForKF of the local points (MergeInertialBA reads it)
+        for (const ba::PointState& s : p->points) {
+            if (s.id >= m.point_scratch.size()) m.point_scratch.resize(std::size_t(s.id) + 1);
+            m.point_scratch[std::size_t(s.id)].ba_local_for = m.current;
+        }
         p->seq = m.next_seq++;
         m.pending = local_mapping::PendingOptimization{};
         m.pending.waiting = local_mapping::Waiting::local_ba;

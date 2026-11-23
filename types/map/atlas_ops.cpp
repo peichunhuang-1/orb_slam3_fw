@@ -306,6 +306,33 @@ void addLoopEdge(Atlas& a, KeyFrameId kf, KeyFrameId other) {
     k->loop_edges.insert(other);
 }
 
+void addMergeEdge(Atlas& a, KeyFrameId kf, KeyFrameId other) {
+    KeyFrame* k = a.editKeyFrame(kf);
+    if (!k) return;
+    k->not_erase = true;
+    k->merge_edges.insert(other);
+}
+
+void eraseChild(Atlas& a, KeyFrameId kf, KeyFrameId child) {
+    if (KeyFrame* k = a.editKeyFrame(kf)) k->children.erase(child);
+}
+
+void moveKeyFrame(Atlas& a, KeyFrameId k, MapId to) {
+    KeyFrame* kf = a.editKeyFrame(k);
+    if (!kf || kf->map == to) return;
+    const MapId from = kf->map;
+    kf->map = to;
+    insertKeyFrame(a, k);
+    if (Map* m = a.editMap(from)) {  // Map::EraseKeyFrame
+        m->keyframes.erase(k);
+        if (!m->keyframes.empty()) {
+            if (k == m->lower_kf) m->lower_kf = *m->keyframes.begin();
+        } else {
+            m->lower_kf = kNone;
+        }
+    }
+}
+
 void setNotErase(Atlas& a, KeyFrameId k) {
     const KeyFrame* old = a.keyframe(k);
     if (!old || old->not_erase) return;
@@ -415,6 +442,14 @@ MapPointId createMapPoint(Atlas& a, const Eigen::Vector3f& pos, KeyFrameId ref, 
     const MapPointId pid = p.id;
     a.points.edit(pid).set(std::move(p));
     return pid;
+}
+
+void movePoint(Atlas& a, MapPointId pid, MapId to) {
+    MapPoint* p = a.editPoint(pid);
+    if (!p || !p->in_map || p->map == to) return;
+    leaveMap(a, *p);
+    p->map = to;
+    insertMapPoint(a, pid);
 }
 
 void insertMapPoint(Atlas& a, MapPointId pid) {

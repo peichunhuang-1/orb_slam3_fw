@@ -29,6 +29,7 @@ enum class Kind {
     pose_graph,      // Optimizer::OptimizeEssentialGraph(pMap, pLoopKF, pCurKF, ..., bFixScale = true): 6DoF
     pose_graph_4dof, // Optimizer::OptimizeEssentialGraph4DoF: x, y, z, yaw of each body
     global,          // Optimizer::BundleAdjustment (GlobalBundleAdjustemnt, bRobust = false): every keyframe and point
+    merge_inertial,  // Optimizer::MergeInertialBA
 };
 
 // Pose graph kinds: a keyframe's vertex (keyframes[i] keeps the id, fixed, Tcw and T_cb)
@@ -95,6 +96,8 @@ struct Problem {
     bool rec_init = false;  // LocalInertialBA bRecInit
     float prior_g = 0, prior_a = 0;
     bool shared_bias = false;  // full_inertial: FullInertialBA's bInit (one bias for all, with the priors)
+    // inertial_init: Rwg held fixed (InertialOptimization(pMap, bg, ba): only biases and velocities)
+    bool fixed_gravity = false;
     // inertial_init: the initial values (bg, ba: the bias vertices'; Rwg, scale)
     Eigen::Matrix3d Rwg = Eigen::Matrix3d::Identity();
     double scale = 1;

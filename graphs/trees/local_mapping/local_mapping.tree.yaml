@@ -43,9 +43,10 @@ root:
                     - SubTree: { tree: trees/local_mapping/process_keyframe.tree.yaml, name: process_keyframe, vocabulary: "{vocabulary}",
                                  inertial: "{inertial}", tracking: "{tracking}", ba_result: "{ba_result}",
                                  mapper: "{mapper}", ba_problem: "{ba_problem}", loop_keyframe: "{loop_keyframe}" }
-      # Loop closing's correction and the global BA's write-back once the keyframe in hand is done (RequestStop .. Release)
+      # Loop closing's correction or merge and the global BA's write-back once the keyframe in hand is done (RequestStop .. Release)
       - ForceSuccess:
           child:
             SubTree: { tree: trees/local_mapping/correct_map.tree.yaml, name: correct_map, vocabulary: "{vocabulary}",
-                       ba_result: "{ba_result}", ba_problem: "{ba_problem}", gba_problem: "{gba_problem}" }
+                       ba_result: "{ba_result}", ba_problem: "{ba_problem}", gba_problem: "{gba_problem}",
+                       mapper: "{mapper}" }
       - mapper_idle: { mapper: "{mapper}" }

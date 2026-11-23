@@ -56,6 +56,7 @@ ba::Result solveInertialInit(const ba::Problem& p) {
     const int r_b = prob.addBlock(Rwg.data(), std::make_shared<GravityDirManifold>());
     const int s_b = prob.addBlock(&scale, std::make_shared<ScaleManifold>());
     prob.setFixed(s_b);  // stereo
+    prob.setFixed(r_b, p.fixed_gravity);
     for (std::size_t i = 0; i < n; ++i) {
         const ba::KeyFrameState& k = p.keyframes[i];
         if (k.prev < 0 || !k.preintegrated) continue;

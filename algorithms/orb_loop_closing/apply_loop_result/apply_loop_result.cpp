@@ -5,7 +5,8 @@
 // A loop is taken for correction (local_mapper.loop; RequestStop: stop_requested, abort_ba) unless another one is
 // pending, the map had a big change since the detection (its poses are stale: the original detects and corrects
 // in one thread, so never on a moved map), or its current or matched keyframe went bad; the flags after the
-// correction then wait for it. Otherwise all flags apply now. Merges are only counted (phase 4).
+// correction then wait for it. A merge likewise (local_mapper.merge), stereo-inertial only (MergeLocal2; a stereo
+// one is only counted). Otherwise all flags apply now.
 #include <algorithm>
 #include <cstddef>
 
@@ -42,7 +43,7 @@ fw::bt::Status apply_loop_result(const loop_closing::LoopResult& loop_result, fw
         ++m.loops_detected;
         const map::KeyFrame* cur = a.goodKeyFrame(loop_result.keyframe);
         const map::Map* cur_map = cur ? a.findMap(cur->map) : nullptr;
-        if (m.loop.pending) {
+        if (m.loop.pending || m.merge.pending) {
             ++m.loops_busy;
         } else if (!cur_map || !a.goodKeyFrame(loop_result.matched_kf)) {
             ++m.loops_gone;
@@ -64,7 +65,33 @@ fw::bt::Status apply_loop_result(const loop_closing::LoopResult& loop_result, fw
             m.abort_ba = true;
         }
     }
-    if (loop_result.kind == loop_closing::LoopResult::Kind::merge) ++m.merges_detected;
+    if (loop_result.kind == loop_closing::LoopResult::Kind::merge) {
+        ++m.merges_detected;
+        const map::KeyFrame* cur = a.goodKeyFrame(loop_result.keyframe);
+        const map::KeyFrame* matched = a.goodKeyFrame(loop_result.matched_kf);
+        const map::Map* cur_map = cur ? a.findMap(cur->map) : nullptr;
+        if (!m.inertial) {
+            // MergeLocal (stereo): not ported
+        } else if (m.loop.pending || m.merge.pending) {
+            ++m.merges_busy;
+        } else if (!cur_map || !matched || !a.findMap(matched->map) || matched->map == cur->map) {
+            ++m.merges_gone;
+        } else if (cur_map->big_change_index != loop_result.big_change) {
+            ++m.merges_stale;
+        } else {
+            now = std::min(loop_result.erase_after_correction, flags.size());
+            local_mapping::PendingMerge& g = m.merge;
+            g = local_mapping::PendingMerge{};
+            g.pending = true;
+            g.epoch = m.reset_epoch;
+            g.keyframe = loop_result.keyframe;
+            g.matched_kf = loop_result.matched_kf;
+            g.T_old_new = loop_result.T_old_new;
+            g.erase_after.assign(flags.begin() + std::ptrdiff_t(now), flags.end());
+            m.stop_requested = true;  // RequestStop
+            m.abort_ba = true;
+        }
+    }
     for (std::size_t i = 0; i < now; ++i) applyEraseFlag(a, m, flags[i]);
     return fw::bt::Status::SUCCESS;
 }

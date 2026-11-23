@@ -2,7 +2,7 @@
 
 這份文件定架構（圖上怎麼連、誰寫 `atlas`、local mapping 的樹怎麼加、資料放在哪裡），並分階段記錄實作與驗證。沿用 [local mapping 的設計](../../orb_local_mapping/docs/DESIGN.md)與 [tracking 的設計](../../orb_tracking/docs/DESIGN.md#原則)的原則（以 id 引用、型別只放資料、程式碼依使用者放置、長時間運算在鎖外），不再重複。
 
-**目前的狀態**：階段 3 完成（loop 會修正，修正後跑 global BA；地圖合併還沒做）。
+**目前的狀態**：階段 4 的 stereo-inertial 部分完成（loop 會修正，修正後跑 global BA；stereo-inertial 的地圖會合併）。stereo 的 `MergeLocal` 還沒做。
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
@@ -10,7 +10,7 @@
 | 1 | place recognition：候選、keyframe 間的匹配、`RelativePoseRansac`、`optimizeRelativePose`、三次確認（loop 與 merge 都偵測，只偵測不修正） | 完成（見下） |
 | 2 | `CorrectLoop`：Stop／Release、`SearchAndFuse`、essential graph（6DoF、4DoF） | 完成（見下） |
 | 3 | global BA：`gba_solver`、分段迭代、寫回時沿 spanning tree 傳遞 | 完成（見下） |
-| 4 | 地圖合併：`MergeLocal`（stereo）、`MergeLocal2`（stereo-inertial）、`MergeInertialBA`；`slam_merge_job` | 未開始 |
+| 4 | 地圖合併：`MergeLocal`（stereo）、`MergeLocal2`（stereo-inertial）、`MergeInertialBA`；`slam_merge_job` | `MergeLocal2`、`MergeInertialBA` 完成（見下）；`MergeLocal` 未做 |
 
 **階段 0 的實跑**（Pi 5，V1_02_medium，lockstep；以暫時的追蹤輸出觀察，之後已移除）：
 
@@ -90,6 +90,33 @@
   - 暫時放寬偵測（同階段 2，跑完已改回）：kf 311 與 134 的 loop 修正後啟動 full inertial 的 GBA（67 個 keyframe、2,618 個點、9,623 個觀測），`gba_solver` 7 次迭代共 265 ms，寫回 10.6 ms，從開始到寫回 0.3 s；job 照常自己結束。
   - 這次的 ATE：odom 0.0923 m（階段 2 同一個 loop、沒有 GBA：0.0932），但 `--frame map --from 20` 從 0.025 m 變成 0.135 m。原因是 gauge：寫回的那一刻（68.3 s）map 座標的軌跡跳了 28 cm；寫回前、後兩段各自對齊時 ATE 只有 0.023 m 與 0.015 m，兩段的對齊差 0.15° 與約 30 cm（大多在 z）。也就是 GBA 沒有把地圖弄歪，而是整張地圖一起平移了。原版 `FullInertialBA` 同樣不固定任何頂點：`imu_init` 的 fixture 裡原版自己的 full BA 讓 keyframe 中心幾乎一致地移動了 7、41、18 cm。這次的 0.3 s 很短，耗時不是問題，所以平行化（下面「耗時」的 1–3）先不做。
   - 待決定：照原版保留 gauge 的平移，或在 GBA 裡固定一個 keyframe 的位姿（與原版不同，但 map 座標不會跳）。
+
+**階段 4**（stereo-inertial）：
+
+- 程式：
+  - `orb_loop_closing/merge_maps/merge.{hpp,cpp}`：`alignMergeInertial`（`ApplyScaledRotation(mSold_new)`、`UpdateFrameIMU`、沒有 BA2 時 `InertialOptimization(pMap, bg, ba)` 的問題）、`applyMergeBias`、`joinMaps`（keyframe 與點搬到目前的地圖、spanning tree 反轉、`SearchAndFuse`、`UpdateConnections`）、`mergeInertialBAProblem`、`applyMergeInertialBA`。
+  - 葉節點 `MergeMaps`（`merge_maps/merge_maps.cpp`，stateful，等 `ba_solver` 時 RUNNING）、`is_merge_pending`。
+  - `ba_solver/merge_inertial.{hpp,cpp}`（新的 `merge_inertial` 種類）；`inertial_init` 加 `fixed_gravity`（Rwg 固定：只估 bias 與速度）。
+  - atlas：`moveKeyFrame`、`movePoint`、`eraseChild`、`addMergeEdge`。
+  - `local_mapper.merge`（`PendingMerge`）、`merge_connected_kfs`（原版的成員 `mvpMergeConnectedKFs`，從不清空）、計數 `merges_busy`、`merges_stale`、`merges_gone`、`merges_done`；`PointScratch::ba_local_for`（點的 `mnBALocalForKF`，local BA 建問題時記下）。
+  - `apply_loop_result` 接下 merge（與 loop 相同的條件：沒有別的 loop／merge 在等、big change 沒變、兩個 keyframe 都還 good）；`loop_closing` 的 merge 也標 `erase_after_correction` 與 `big_change`。`correct_map` 樹多一個輸出 `mapper`（`UpdateFrameIMU`）。
+- 照原版保留的怪處：
+  - `MergeLocal2` 不把舊地圖設為 bad：合併後它留在 atlas 裡，是空的（`CountMaps` 仍是 2，之後 GBA 的「只有一張地圖」條件不成立）。
+  - 不加 merge edge、不 `InformNewBigChange`；也不重開被停掉的 GBA（`bRelaunchBA` 只有 `MergeLocal` 用）。
+  - `mvpMergeConnectedKFs` 是成員，只 push 不清：第二次合併時融合用的還是第一次的那幾個 keyframe。
+  - `MergeInertialBA` 不收「目前 keyframe 上一次 local BA 已經拿過的點」（點的 `mnBALocalForKF` 等於它的 id），只計數；所以目前這一側幾乎只靠融合來的舊地圖點與 IMU 邊。covisible keyframe 從被看到最少的 30 個點挑（`std::sort` 不穩定，輸入照 id 排，對應原版的指標順序）。
+- 和原版不同的地方：
+  - 右影像獨有的觀測不進 `MergeInertialBA`。原版讀它的左 feature index，是 −1（未定義行為）：在有這種觀測的場景上，cost 從第一次迭代就是 NaN，LM 每一步都被拒絕，什麼都沒動（reference 自己加的「非有限值就不寫回」大概就是為此）。
+  - 走訪碰到同一個 keyframe 兩次（matched keyframe 是它地圖的最後一個）時只收一次；原版會加兩次。
+  - `UpdateFrameIMU` 經由 status（`imu_update_seq`）送給 tracking，與 IMU 初始化相同。tracker 的 last keyframe 用 local mapping 清完佇列後的目前 keyframe。
+- fixture（`loop/merge_inertial.txt`、`loop/merge_inertial_bias.txt`，原版的 `MergeLocal2`；場景見 fixtures 的 README）：
+  - 完全相同：問題（12 + 7 個最佳化的 keyframe、1 個固定、459 個點、8,067 個觀測）、keyframe 與點在哪張地圖、spanning tree、`mvpMergeConnectedKFs`、融合結果、bad 旗標。
+  - 數值：位姿 1e-4°、2e-6 m；速度 1e-5 m/s；舊地圖那側的 bias 2e-7，目前視窗的 bias 有一個共同的 4e-5 偏移（BA 移動了最多 0.13，8 次迭代沒收斂）。
+- V1_02 實跑（`slam_merge_job`）：
+  - 缺口在 30–32 s 時沒有 merge（254 個 merge 候選都沒通過，同階段 1）。缺口改到 45–47 s（`config/frame_gate.yaml`）：第二張地圖的 IMU 初始化與 BA2 之後，66 s 回到第一張地圖的區域。
+  - kf 303（地圖 1）與 kf 169（地圖 0）偵測到 merge，`MergeInertialBA` 35 個 keyframe、629 個點，8 次迭代 45 ms；job 照常自己結束。
+  - map 座標下分段對齊：地圖 0（20–45 s）旋轉 122.9°、t (0.93, 2.05, 0.72)，誤差 2.2 cm；合併前的地圖 1（55–66 s）是自己的座標（62°）；合併後（66.3–90 s）122.1°、t (0.90, 2.07, 0.72)，誤差 2.1 cm。地圖 0 與合併後一起用一個對齊：2.6 cm（地圖 0 自己 2.2 cm）。也就是合併把目前的地圖放回了地圖 0 的座標。
+  - 整條軌跡的 ATE 很大（odom 1.57 m），來自兩件與合併無關的事：合併前地圖 1 在自己的座標裡；tracking 開新地圖時 odom 跳了約 40°（缺口在 30–32 s、沒有合併的那次也有，odom 0.35 m）。odom 在換地圖時不連續是 tracking 既有的行為。
 
 **驗收**：V1_02 上整條軌跡的 ATE 與原版相近、loop 的次數相近。中間狀態不要求一致（原版的三條執行緒時序本身不固定）。函式層以 `fixture_gen` 的答案比對，是為了除錯，不是驗收條件。
 
@@ -266,7 +293,7 @@ local_mapping                                              gba_solver（GbaSolve
 
 ## local mapping 的樹
 
-階段 3 的樹（`+` 是階段 4 要加的）：
+階段 4 的樹：
 
 ```
 local_mapping
@@ -279,12 +306,15 @@ local_mapping
   ├ ForceSuccess
   │ └ SubTree correct_map
   │   └ Sequence
-  │     ├ stop_requested              有 loop 要修正，或 GBA 的結果要寫回（之後：merge）
-  │     ├ ForceSuccess( Sequence[ is_loop_pending, empty_queue ] )   EmptyQueue：只在修正 loop 之前（GBA 的寫回不清佇列）
+  │     ├ stop_requested              有 loop 要修正、merge 要做，或 GBA 的結果要寫回
+  │     ├ ForceSuccess( Sequence[ Fallback[is_loop_pending, is_merge_pending], empty_queue ] )
+  │     │                             EmptyQueue：只在修正 loop、合併之前（GBA 的寫回不清佇列）
   │     ├ stop_mapping                Stop()：stopped
   │     ├ ForceSuccess( Sequence[ is_loop_pending, CorrectLoop ] )   stateful：停掉進行中的 GBA；beginCorrectLoop →
   │     │                                                            pose_graph(_4dof) → endCorrectLoop；GBA 是否 due
-  │     │ + Sequence[ is_pending{merge}, MergeMaps ]                 （階段 4）
+  │     ├ ForceSuccess( Sequence[ is_merge_pending, MergeMaps ] )   stateful：停掉進行中的 GBA；alignMergeInertial →
+  │     │                                                            （沒有 BA2：inertial_init）→ joinMaps →
+  │     │                                                            merge_inertial → applyMergeInertialBA
   │     ├ start_global_ba             due 的 GBA：建問題送給 gba_solver（沒有就什麼都不做）
   │     ├ apply_global_ba             ready 的 GBA：寫回（沒有就什麼都不做）
   │     └ release_stop                Release：stop_requested = false、stopped = false
@@ -295,7 +325,7 @@ local_mapping
 - **`CorrectLoop`**（`correct_loop/`）：start 做同步部分、送出位姿圖，RUNNING；收到同一個 seq 的結果就寫回，再套用留下的旗標。期間有 reset（`reset_epoch` 改變）就丟掉。
 - **`step_global_ba`**（同步）：seq 與進行中的 GBA 相同時，partial 就送 `gba_continue`；final 就存下結果（`local_mapper.gba`，ready），設 `stop_requested`、`abort_ba`。之後來了新的 loop 時，`CorrectLoop` 已清掉 GBA，舊的結果在這裡被丟掉，`gba_solver` 收不到 continue，就停在那一次迭代。
 - **`start_global_ba`／`apply_global_ba`**（同步，`correct_map` 裡）：前者在 `CorrectLoop` 剛修正完的同一次停止裡送出問題（原版在 `CorrectLoop` 結尾開 GBA 執行緒）；後者在 GBA 的結果到了之後的下一次停止寫回。同時有 loop 要修正時，`CorrectLoop` 先停掉 GBA，ready 的結果也丟掉（原版的 `mbStopGBA`；先寫回 GBA 的話，loop 偵測時的位姿就過時了）。
-- **RUNNING 只出現在 `CorrectLoop`（之後還有 `MergeMaps`）**，都是在等 `ba_solver`。這期間 `has_new_keyframe` 為 false（`stop_requested`），tracking 看到 `stopped`／`stop_requested` 就不建 keyframe（`need_new_keyframe` 已經這樣判斷），與原版 LM 停著時相同。process_keyframe 還在 RUNNING（等 local BA）時，ReactiveSequence 不會走到 `correct_map`，所以已送出的 local BA 先寫回才修正。
+- **RUNNING 只出現在 `CorrectLoop` 與 `MergeMaps`**，都是在等 `ba_solver`。這期間 `has_new_keyframe` 為 false（`stop_requested`），tracking 看到 `stopped`／`stop_requested` 就不建 keyframe（`need_new_keyframe` 已經這樣判斷），與原版 LM 停著時相同。process_keyframe 還在 RUNNING（等 local BA）時，ReactiveSequence 不會走到 `correct_map`，所以已送出的 local BA 先寫回才修正。
 - **GBA 本身不是 RUNNING**：它在 `gba_solver` 上跑好幾秒，期間 local mapping 照常處理 keyframe（原版也是），只有寫回時停一下。
 - 葉節點的位置：Stop／EmptyQueue／Release 是 `LocalMapping` 的方法，放在 `algorithms/orb_local_mapping/`（`stop_requested`、`empty_queue`、`stop_mapping`、`release_stop`）；`is_loop_pending`、`CorrectLoop`、`start_global_ba`、`step_global_ba`、`apply_global_ba` 的邏輯是 loop closing 的，放在 `algorithms/orb_loop_closing/`。
 
@@ -414,7 +444,9 @@ graphs/
 | ~~`loop_closing.keyframe` 的佇列深度~~ | **已定：16**（偵測平均 2.8 ms，最大 19 ms） | |
 | ~~nls 平行化的程度~~ | **已定：單執行緒**（GBA 0.3 s） | |
 | ~~寫回時跳過沒變的點的門檻~~ | **已定：不跳過**（寫回 10.6 ms） | |
-| inertial GBA 的 gauge | 照原版不固定（map 座標在寫回時整張平移，V1_02 上 28 cm） | 階段 4 之前 |
+| inertial GBA 的 gauge | 照原版不固定（map 座標在寫回時整張平移，V1_02 上 28 cm） | 待使用者決定 |
+| stereo 的 `MergeLocal` | 未做（兩張 job 圖都是 stereo-inertial；stereo 的 merge 只計數） | 待使用者決定 |
+| tracking 開新地圖時 odom 跳動 | 未查（缺口後 odom 跳約 40°；缺口在 30–32 s、沒有合併時 odom ATE 0.35 m。屬於 tracking，不是 loop closing） | 待使用者決定 |
 | ~~Sim3 或 SE3~~ | **已定：SE3** | |
 | ~~誰寫 atlas~~ | **已定：只有 local mapping（方案 B）** | |
 | ~~被刪掉的候選~~ | **已定：忽略並計數** | |

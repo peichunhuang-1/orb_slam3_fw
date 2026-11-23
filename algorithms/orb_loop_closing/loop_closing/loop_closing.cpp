@@ -11,9 +11,9 @@
 //          after BA2, yaw only.
 //   then   the region's state reset (SetErase of its last current and matched keyframes), a merge resets the
 //          loop region too.
-// A loop to correct: the flags of the region's reset are marked as coming after the correction
+// A loop to correct or a merge to make: the flags of the region's reset are marked as coming after it
 // (erase_after_correction), and big_change records the map's mnBigChangeIdx this detection saw. Local mapping
-// corrects (correct_loop/); merges are only counted (phase 4).
+// corrects (correct_loop/) and merges (merge_maps/).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -102,6 +102,8 @@ private:
                     T_old_new = SE3d(geometry::exp(phi), T_old_new.translation());
                 }
                 r.kind = LoopResult::Kind::merge;
+                r.erase_after_correction = r.erase_flags.size();
+                r.big_change = cur_map.big_change_index;
                 r.matched_kf = matched.id;
                 r.Tmw = Tmw2 * Tw2c * Tcw1;
                 r.Tcw = merge.Tlw;

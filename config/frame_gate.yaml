@@ -1,4 +1,6 @@
 # frame_gate block (params/frame_gate_params.hpp), for graphs/slam_merge_job.graph.yaml: a 2 s gap in the images
-# (the IMU goes on) after inertial BA2, so tracking starts a second map.
-drop_from: 30.0
-drop_to: 32.0
+# (the IMU goes on) after inertial BA2, so tracking starts a second map. At 45-47 s the second map has its IMU
+# initialized (and BA2) before the camera comes back to the first map's area at about 66 s, where loop closing
+# merges them (at 30-32 s no merge is detected).
+drop_from: 45.0
+drop_to: 47.0

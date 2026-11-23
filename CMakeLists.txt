@@ -207,6 +207,7 @@ endforeach()
 #                      place_recognition vs tests/fixtures/orb_slam3/loop
 #   correct_loop       correct_loop/correction + ba_solver's pose graph kinds vs tests/fixtures/orb_slam3/loop/correct*;
 #                      then global_ba + ba_solver's global kind vs loop/gba
+#   merge              merge_maps/merge + ba_solver's inertial_init and merge_inertial kinds vs loop/merge_inertial*
 set(orb_loop_closing_correct_loop_test_SOURCES algorithms/orb_loop_closing/correct_loop/correction.cpp
     algorithms/ba_solver/pose_graph.cpp algorithms/orb_loop_closing/global_ba/global_ba_ops.cpp
     algorithms/orb_local_mapping/shared/global_ba.cpp algorithms/ba_solver/global_ba.cpp)
@@ -216,7 +217,12 @@ set(orb_loop_closing_place_recognition_test_SOURCES
     algorithms/orb_loop_closing/relative_pose_ransac/relative_pose_ransac.cpp
     algorithms/orb_loop_closing/optimize_relative_pose/optimize_relative_pose.cpp
     algorithms/orb_loop_closing/place_recognition/place_recognition.cpp)
-foreach(t place_recognition correct_loop)
+set(orb_loop_closing_merge_test_SOURCES algorithms/orb_loop_closing/merge_maps/merge.cpp
+    algorithms/orb_loop_closing/correct_loop/correction.cpp
+    algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.cpp
+    algorithms/orb_local_mapping/shared/global_ba.cpp algorithms/ba_solver/inertial.cpp
+    algorithms/ba_solver/inertial_residuals.cpp algorithms/ba_solver/merge_inertial.cpp)
+foreach(t place_recognition correct_loop merge)
   add_executable(orb_loop_closing_${t}_test tests/orb_loop_closing/${t}_test.cpp
                  ${orb_loop_closing_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
   target_include_directories(orb_loop_closing_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
