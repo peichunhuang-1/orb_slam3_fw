@@ -1,7 +1,8 @@
 #pragma once
 // The scene of tests/fixtures/orb_slam3/loop (README.md) as an atlas: keyframes with the original's BoW, points
 // with its descriptors, normals and scale ranges, the covisibility from the observations. The correct cases also
-// have the original's spanning tree, velocities, T_cb and the map's inertial flags.
+// have the original's spanning tree, velocities, T_cb and the map's inertial flags ("gba": the IMU not
+// initialized, keyframe 0 the map's origin).
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -98,7 +99,8 @@ inline void load(Scene& s, const fixture::File& f, const fixture::Rig& rig) {
     const bool inertial = f.scalar("inertial") != 0;
     map::Map* m = a.editMap(a.keyframe(s.kfs[0])->map);
     m->inertial = inertial;
-    m->imu_initialized = true;
+    m->imu_initialized = !f.has("gba_kf");
+    if (f.has("gba_kf")) m->keyframe_origins = {s.kfs[0]};
     const Eigen::MatrixXd& par = f["parents"];
     const Eigen::MatrixXd& vel = f["velocity"];
     for (int k = 0; k < K; ++k) a.editKeyFrame(s.kfs[std::size_t(k)])->children.clear();

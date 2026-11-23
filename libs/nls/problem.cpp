@@ -615,6 +615,16 @@ struct Problem::Impl {
     }
 };
 
+// The LM loop of solve(), one iteration per step(): the state carried between them is the options, λ, ν, the
+// small-step count and the summary (g2o keeps the same across its iterations).
+struct Problem::Run {
+    Options o;
+    Summary s;
+    double lambda = 0, ni = 2;
+    int it = 0, n_small = 0;
+    bool done = false;
+};
+
 Problem::Problem() : impl_(std::make_unique<Impl>()) {}
 Problem::~Problem() = default;
 
@@ -676,69 +686,85 @@ Eigen::Map<const Eigen::VectorXd> Problem::error(int residual) const {
 }
 double Problem::chi2(int residual) const { return impl_->chi2(impl_->res.at(std::size_t(residual))); }
 
-Summary Problem::solve(const Options& o) {
+void Problem::start(const Options& o) {
     Impl& m = *impl_;
-    Summary s;
+    run_ = std::make_unique<Run>();
+    run_->o = o;
     m.setup();
     m.computeActiveErrors();
-    s.initial_cost = s.final_cost = m.activeRobustCost();
-    if (m.free_block.empty()) return s;
+    run_->s.initial_cost = run_->s.final_cost = m.activeRobustCost();
+    run_->done = m.free_block.empty() || o.max_iterations <= 0;
+}
 
-    double lambda = 0, ni = 2;
-    int n_small = 0;
-    for (int it = 0; it < o.max_iterations; ++it) {
-        m.computeActiveErrors();
-        double current = m.activeRobustCost();
-        const double initial = current;
-        m.buildSystem();
-        if (it == 0) {
-            lambda = o.initial_lambda > 0 ? o.initial_lambda : o.tau * m.maxDiagonal();
-            ni = 2;
-            n_small = 0;
-        }
-        double rho = 0;
-        int tries = 0;
-        do {
-            m.push();
-            const bool ok = m.solveLinear(lambda);
-            double trial;
-            if (ok) {
-                m.update();
-                m.computeActiveErrors();
-                trial = m.activeRobustCost();
-            } else {
-                m.dx.setZero();
-                s.linear_solver_failed = true;
-                trial = std::numeric_limits<double>::max();
-            }
-            double scale = 0;
-            for (int j = 0; j < m.total_dim; ++j) scale += m.dx[j] * (lambda * m.dx[j] + m.b[j]);
-            scale += 1e-3;
-            rho = (current - trial) / scale;
-            if (rho > 0 && std::isfinite(trial)) {
-                const double alpha = std::min(1. - std::pow(2 * rho - 1, 3), 2. / 3.);
-                lambda *= std::max(1. / 3., alpha);
-                ni = 2;
-                current = trial;
-            } else {
-                lambda *= ni;
-                ni *= 2;
-                m.pop();
-            }
-            ++tries;
-        } while (rho < 0 && tries < o.max_trials);
-        ++s.iterations;
-        s.final_cost = current;
-        if (tries == o.max_trials || rho == 0) break;
-        if (o.small_steps > 0) {
-            if ((initial - current) < o.small_step_ratio * initial)
-                ++n_small;
-            else
-                n_small = 0;
-            if (n_small >= o.small_steps) break;
-        }
+bool Problem::finished() const { return !run_ || run_->done; }
+
+Summary Problem::summary() const { return run_ ? run_->s : Summary{}; }
+
+void Problem::step() {
+    if (finished()) return;
+    Impl& m = *impl_;
+    Run& R = *run_;
+    const Options& o = R.o;
+    m.computeActiveErrors();
+    double current = m.activeRobustCost();
+    const double initial = current;
+    m.buildSystem();
+    if (R.it == 0) {
+        R.lambda = o.initial_lambda > 0 ? o.initial_lambda : o.tau * m.maxDiagonal();
+        R.ni = 2;
+        R.n_small = 0;
     }
-    return s;
+    double rho = 0;
+    int tries = 0;
+    do {
+        m.push();
+        const bool ok = m.solveLinear(R.lambda);
+        double trial;
+        if (ok) {
+            m.update();
+            m.computeActiveErrors();
+            trial = m.activeRobustCost();
+        } else {
+            m.dx.setZero();
+            R.s.linear_solver_failed = true;
+            trial = std::numeric_limits<double>::max();
+        }
+        double scale = 0;
+        for (int j = 0; j < m.total_dim; ++j) scale += m.dx[j] * (R.lambda * m.dx[j] + m.b[j]);
+        scale += 1e-3;
+        rho = (current - trial) / scale;
+        if (rho > 0 && std::isfinite(trial)) {
+            const double alpha = std::min(1. - std::pow(2 * rho - 1, 3), 2. / 3.);
+            R.lambda *= std::max(1. / 3., alpha);
+            R.ni = 2;
+            current = trial;
+        } else {
+            R.lambda *= R.ni;
+            R.ni *= 2;
+            m.pop();
+        }
+        ++tries;
+    } while (rho < 0 && tries < o.max_trials);
+    ++R.s.iterations;
+    ++R.it;
+    R.s.final_cost = current;
+    if (tries == o.max_trials || rho == 0 || R.it >= o.max_iterations) {
+        R.done = true;
+        return;
+    }
+    if (o.small_steps > 0) {
+        if ((initial - current) < o.small_step_ratio * initial)
+            ++R.n_small;
+        else
+            R.n_small = 0;
+        if (R.n_small >= o.small_steps) R.done = true;
+    }
+}
+
+Summary Problem::solve(const Options& o) {
+    start(o);
+    while (!finished()) step();
+    return summary();
 }
 
 }  // namespace nls

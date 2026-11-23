@@ -1,6 +1,6 @@
 // empty_queue: LocalMapping::EmptyQueue (only ProcessNewKeyFrame for each queued keyframe: no triangulation, no
-// local BA, not sent to loop closing, as the original), then Stop(): stopped, which tracking reads (no new
-// keyframe while stopped). Called by loop closing before CorrectLoop.
+// local BA, not sent to loop closing, as the original). Called by loop closing before CorrectLoop only: the global
+// BA's write-back stops local mapping without it (stop_mapping).
 #include "algorithms/orb_local_mapping/shared/process_keyframe.hpp"
 #include "fw/fw.hpp"
 
@@ -11,7 +11,6 @@ fw::bt::Status empty_queue(const map::Vocabulary& vocabulary, fw::Write<map::Atl
     local_mapping::LocalMapper& m = *mapper;
     while (orb_local_mapping::processNewKeyFrame(*atlas, m, vocabulary)) {
     }
-    if (!m.not_stop) m.stopped = true;
     return fw::bt::Status::SUCCESS;
 }
 

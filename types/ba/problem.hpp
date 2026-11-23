@@ -5,7 +5,8 @@
 // pointer into the atlas: the preintegrations and cameras are copies.
 //
 // The fields are what the ORB-SLAM3 optimizations need (four of local mapping's, the two essential graphs of
-// loop closing).
+// loop closing, its visual global BA). The global BA (gba_solver) is solved in steps: one iteration per
+// message, a partial Result after each but the last, the next one asked for with a Continue.
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -27,6 +28,7 @@ enum class Kind {
     full_inertial,   // Optimizer::FullInertialBA
     pose_graph,      // Optimizer::OptimizeEssentialGraph(pMap, pLoopKF, pCurKF, ..., bFixScale = true): 6DoF
     pose_graph_4dof, // Optimizer::OptimizeEssentialGraph4DoF: x, y, z, yaw of each body
+    global,          // Optimizer::BundleAdjustment (GlobalBundleAdjustemnt, bRobust = false): every keyframe and point
 };
 
 // Pose graph kinds: a keyframe's vertex (keyframes[i] keeps the id, fixed, Tcw and T_cb)
@@ -117,9 +119,16 @@ struct Result {
     Eigen::Vector3d bg = Eigen::Vector3d::Zero(), ba = Eigen::Vector3d::Zero();
     int iterations = 0;
     double solve_ms = 0;
+    bool partial = false;  // gba_solver: more iterations to come (only seq, kind, iterations, solve_ms are set)
+};
+
+// gba_solver: run the next iteration of the problem with this seq (a different one is ignored)
+struct Continue {
+    std::uint64_t seq = 0;
 };
 
 }  // namespace ba
 
 FW_REGISTER_TYPE(ba::Problem, "ba/Problem")
 FW_REGISTER_TYPE(ba::Result, "ba/Result")
+FW_REGISTER_TYPE(ba::Continue, "ba/Continue")

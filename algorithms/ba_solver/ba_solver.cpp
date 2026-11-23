@@ -5,9 +5,12 @@
 //   inertial_init  Optimizer::InertialOptimization
 //   full_inertial  Optimizer::FullInertialBA
 //   pose_graph, pose_graph_4dof  Optimizer::OptimizeEssentialGraph (6DoF), OptimizeEssentialGraph4DoF
-// local_ba.hpp, local_inertial.hpp, inertial.hpp, pose_graph.hpp.
+//   global         Optimizer::BundleAdjustment
+// local_ba.hpp, local_inertial.hpp, inertial.hpp, pose_graph.hpp, global_ba.hpp. Each problem is solved to the end;
+// the global BA of loop closing goes to a second instance of the solvers, gba_solver (gba_solver.cpp), in steps.
 #include <chrono>
 
+#include "algorithms/ba_solver/global_ba.hpp"
 #include "algorithms/ba_solver/inertial.hpp"
 #include "algorithms/ba_solver/local_ba.hpp"
 #include "algorithms/ba_solver/local_inertial.hpp"
@@ -32,6 +35,8 @@ public:
             r = ba_solver::solvePoseGraph(p);
         } else if (p.kind == ba::Kind::pose_graph_4dof) {
             r = ba_solver::solvePoseGraph4DoF(p);
+        } else if (p.kind == ba::Kind::global) {
+            r = ba_solver::solveGlobal(p);
         } else {
             r = ba_solver::solveFullInertial(p);
         }

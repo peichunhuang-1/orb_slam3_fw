@@ -70,6 +70,24 @@ struct PendingLoop {
     std::unordered_map<map::MapPointId, map::KeyFrameId> corrected_reference;
 };
 
+// Loop closing's global BA (LoopClosing::RunGlobalBundleAdjustment), solved on gba_solver in steps while local
+// mapping goes on (algorithms/orb_loop_closing/docs/DESIGN.md, "global BA：分段迭代"):
+//   due      a loop was corrected and the original would start one (start_global_ba sends it)
+//   running  sent; each partial result is answered with a Continue of the same seq
+//   ready    the final result arrived; written back at the next stop (apply_global_ba)
+// Stopped (mbStopGBA) by the next loop's correction: dropped, its seq no longer answered.
+struct PendingGlobalBA {
+    enum class State { none, due, running, ready };
+    State state = State::none;
+    std::uint64_t seq = 0;
+    std::uint64_t epoch = 0;              // reset_epoch when it started: a reset since drops it
+    map::MapId map = map::kNone;          // pActiveMap
+    map::KeyFrameId loop_kf = map::kNone; // nLoopKF: the loop's current keyframe (mnBAGlobalForKF)
+    bool imu_initialized = false;         // bImuInit: a visual BA is not written back once the IMU is initialized
+    double started = 0;                   // steady clock (s), for the time it took
+    ba::Result result;                    // ready
+};
+
 struct LocalMapper {
     bool inertial = false;  // mbInertial (params.sensor)
 
@@ -116,10 +134,14 @@ struct LocalMapper {
     std::uint64_t loop_skipped_bad = 0;  // SetNotErase / SetErase on a keyframe already bad (skipped)
     std::uint64_t loops_detected = 0, merges_detected = 0;  // loop_result of kind loop / merge
     // Loops not corrected: another one pending, the map changed since the detection (big change), the current or
-    // matched keyframe gone bad meanwhile; loops corrected; global BAs the original would start (phase 3)
-    std::uint64_t loops_busy = 0, loops_stale = 0, loops_gone = 0, loops_corrected = 0, gba_wanted = 0;
+    // matched keyframe gone bad meanwhile; loops corrected
+    std::uint64_t loops_busy = 0, loops_stale = 0, loops_gone = 0, loops_corrected = 0;
+    // Global BAs started, stopped by a later loop, written back, dropped at the write-back (a reset, the map gone,
+    // the IMU initialized during a visual one)
+    std::uint64_t gba_started = 0, gba_stopped = 0, gba_applied = 0, gba_dropped = 0;
 
     PendingLoop loop;
+    PendingGlobalBA gba;
 };
 
 }  // namespace local_mapping

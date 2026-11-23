@@ -148,7 +148,8 @@ void perturb(Scene& s, std::mt19937& g) {
     for (auto& p : s.pts) p += 0.1 * Eigen::Vector3d(n(g), n(g), n(g));
 }
 
-nls::Summary solveBA(Scene& s, bool schur, int iterations, std::shared_ptr<const nls::Loss> loss = nullptr) {
+nls::Summary solveBA(Scene& s, bool schur, int iterations, std::shared_ptr<const nls::Loss> loss = nullptr,
+                     bool stepped = false) {
     nls::Problem prob;
     const auto se3 = std::make_shared<nls::SE3Left>();
     std::vector<int> cb, pb;
@@ -162,7 +163,14 @@ nls::Summary solveBA(Scene& s, bool schur, int iterations, std::shared_ptr<const
                          Eigen::Matrix2d::Identity() * 0.5, loss);
     nls::Options o;
     o.max_iterations = iterations;
-    return prob.solve(o);
+    if (!stepped) return prob.solve(o);
+    // As the global BA: one iteration per call, the errors read in between
+    prob.start(o);
+    while (!prob.finished()) {
+        prob.step();
+        for (int r = 0; r < prob.numResiduals(); r += 50) (void)prob.chi2(r);
+    }
+    return prob.summary();
 }
 
 void testBA() {
@@ -192,6 +200,32 @@ void testBA() {
     double moved = 0;
     for (int k = 0; k < 7; ++k) moved = std::max(moved, std::abs(a.cams[0][std::size_t(k)] - fixed0[std::size_t(k)]));
     check(moved == 0, "BA: the fixed camera does not move", moved);
+}
+
+// solve() in steps (start, step, finished) takes the same iterations and ends where solve() does, with the
+// stop rules (max iterations, the small steps) and a robust loss
+void testStepped() {
+    std::mt19937 g(11);
+    for (const int its : {4, 100}) {
+        Scene a = makeScene(g, 0.5);
+        perturb(a, g);
+        Scene b = a;
+        const auto huber = std::make_shared<nls::Huber>(std::sqrt(5.991));
+        const nls::Summary sa = solveBA(a, true, its, huber), sb = solveBA(b, true, its, huber, true);
+        double diff = 0;
+        for (std::size_t c = 0; c < a.cams.size(); ++c)
+            for (int k = 0; k < 7; ++k)
+                diff = std::max(diff, std::abs(a.cams[c][std::size_t(k)] - b.cams[c][std::size_t(k)]));
+        for (std::size_t i = 0; i < a.pts.size(); ++i) diff = std::max(diff, (a.pts[i] - b.pts[i]).cwiseAbs().maxCoeff());
+        check(diff == 0, "stepped: the same parameters as solve()", diff);
+        check(sa.iterations == sb.iterations && sa.final_cost == sb.final_cost && sa.initial_cost == sb.initial_cost,
+              "stepped: the same summary", sb.iterations);
+        if (its == 100) check(sa.iterations < its, "stepped: the small-step rule stopped it", sa.iterations);
+    }
+    nls::Problem empty;
+    nls::Options o;
+    empty.start(o);
+    check(empty.finished(), "stepped: nothing to optimize is finished at the start");
 }
 
 struct Line final : nls::Residual {
@@ -236,6 +270,7 @@ int main() {
     testCurve();
     testBA();
     testHuber();
+    testStepped();
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

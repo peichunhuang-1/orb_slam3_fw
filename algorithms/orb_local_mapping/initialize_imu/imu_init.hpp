@@ -19,12 +19,10 @@
 //                        on the whole map. As the original, a right observation is kept only when its feature index
 //                        (left ones first) is below the number of right features.
 //   storeFullInertial    its result kept as the original's mTcwGBA, mVwbGBA, mBiasGBA, mPosGBA, mnBAGlobalForKF
-//   correctFromOrigins   InitializeIMU's last part: from the map's origin keyframes down the spanning tree, the
-//                        keyframes the BA did not see (processed meanwhile) get the correction of their parent;
-//                        every keyframe then takes its GBA pose (velocity and bias when bImu); points take their
-//                        GBA position or follow their reference keyframe's correction (no UpdateNormalAndDepth,
-//                        as the original); mnKFs, mIdxInit, tracking's mState = OK (tracking_ok_seq), bInitializing
-//                        cleared, IncreaseChangeIndex.
+//                        (shared/global_ba.hpp, storeGlobalBA)
+//   correctFromOrigins   InitializeIMU's last part: the GBA's write-back down the spanning tree
+//                        (shared/global_ba.hpp, propagateGlobalBA); mnKFs, mIdxInit, tracking's mState = OK
+//                        (tracking_ok_seq), bInitializing cleared, IncreaseChangeIndex.
 #include <vector>
 
 #include "types/ba/problem.hpp"

@@ -25,6 +25,7 @@ boxes:
       tracking:            { tree: trees/tracking/tracking.tree.yaml }
       local_mapping:       { tree: trees/local_mapping/local_mapping.tree.yaml }
       ba_solver:           { algorithm: BaSolver }         # no resource: the optimizations outside the lock
+      gba_solver:          { algorithm: GbaSolver }        # loop closing's global BA, in steps
       loop_closing:        { algorithm: LoopClosing }      # reads the atlas; its changes go to local mapping
 edges:
   - config://euroc_mcap_driver.yaml -> euroc_mcap_driver.params
@@ -51,6 +52,10 @@ edges:
   # local BA / IMU initialization outside the lock
   - local_mapping.ba_problem -> ba_solver.problem
   - ba_solver.result -> local_mapping.ba_result
+  # global BA, one iteration per step (algorithms/orb_loop_closing/docs/DESIGN.md, "global BA")
+  - local_mapping.gba_problem -> gba_solver.problem
+  - local_mapping.gba_continue -> gba_solver.continue
+  - gba_solver.result -> local_mapping.gba_result
   # loop closing (algorithms/orb_loop_closing/docs/DESIGN.md)
   - local_mapping.loop_keyframe -> loop_closing.keyframe
   - loop_closing.result -> local_mapping.loop_result

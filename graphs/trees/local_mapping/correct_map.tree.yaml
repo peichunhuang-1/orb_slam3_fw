@@ -1,12 +1,14 @@
-# Loop closing's correction of the map, run by local mapping once a stop is requested and the keyframe in hand is
-# done (algorithms/orb_loop_closing/docs/DESIGN.md, "local mapping 的樹"): EmptyQueue and Stop, CorrectLoop
-# (RUNNING while ba_solver computes the essential graph), Release.
+# Loop closing's changes to the map, run by local mapping once a stop is requested and the keyframe in hand is
+# done (algorithms/orb_loop_closing/docs/DESIGN.md, "local mapping 的樹"): for a loop EmptyQueue, then Stop;
+# CorrectLoop (RUNNING while ba_solver computes the essential graph) and the global BA it makes due, sent to
+# gba_solver; the write-back of a global BA gba_solver finished; Release.
 version: 1
 inputs:
   ba_result:  { type: ba/Result }
   vocabulary: { type: map/Vocabulary }
 outputs:
-  ba_problem: { type: ba/Problem }
+  ba_problem:  { type: ba/Problem }
+  gba_problem: { type: ba/Problem }
 resources:   # the parent's of the same name
   atlas:        { type: map/Atlas }
   local_mapper: { type: local_mapping/LocalMapper }
@@ -14,11 +16,19 @@ root:
   Sequence:
     children:
       - stop_requested: {}
-      - empty_queue: { vocabulary: "{vocabulary}" }
+      - ForceSuccess:
+          child:
+            Sequence:
+              children:
+                - is_loop_pending: {}
+                - empty_queue: { vocabulary: "{vocabulary}" }
+      - stop_mapping: {}
       - ForceSuccess:
           child:
             Sequence:
               children:
                 - is_loop_pending: {}
                 - CorrectLoop: { name: correct_loop, ba_result: "{ba_result}", ba_problem: "{ba_problem}" }
+      - start_global_ba: { gba_problem: "{gba_problem}" }
+      - apply_global_ba: {}
       - release_stop: {}

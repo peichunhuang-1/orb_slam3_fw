@@ -122,9 +122,19 @@ public:
 
     Summary solve(const Options& options);
 
+    // solve() in steps (a caller that must be able to stop between iterations: the global BA): start() sets
+    // up the solve, each step() runs one iteration, finished() once solve() would have returned; the result is
+    // then the same as solve()'s. Changing the problem (blocks, residuals, setActive) in between is not allowed.
+    void start(const Options& options);
+    void step();
+    bool finished() const;
+    Summary summary() const;
+
 private:
     struct Impl;
+    struct Run;
     std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Run> run_;
 };
 
 }  // namespace nls

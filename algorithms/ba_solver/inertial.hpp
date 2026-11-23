@@ -14,11 +14,16 @@
 //                  one EdgeMono per observation (Huber √5.991). A point with no observation is left out.
 //                  Result: every keyframe's Tcw, and for those with imu set velocity and bias; the points'
 //                  positions.
+//                  startFullInertial: the same, solved in steps (the global BA; stepped.hpp).
+#include <memory>
+
+#include "algorithms/ba_solver/stepped.hpp"
 #include "types/ba/problem.hpp"
 
 namespace ba_solver {
 
 ba::Result solveInertialInit(const ba::Problem& p);
 ba::Result solveFullInertial(const ba::Problem& p);
+std::unique_ptr<SteppedSolve> startFullInertial(ba::Problem p);
 
 }  // namespace ba_solver

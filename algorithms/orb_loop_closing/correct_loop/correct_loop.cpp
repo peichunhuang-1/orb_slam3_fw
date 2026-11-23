@@ -5,8 +5,9 @@
 //            matched keyframe went bad.
 //   running: the result with the problem's seq written back (endCorrectLoop), then the region's SetErase that
 //            the original makes after CorrectLoop; SUCCESS. A reset meanwhile: dropped. Other ticks: RUNNING.
-// Either way the loop is no longer pending. The global BA the original then starts (when the IMU is not
-// initialized, or the map has fewer than 200 keyframes and is the only one) is phase 3: counted (gba_wanted).
+// Either way the loop is no longer pending. A global BA in progress is stopped at the start (mbStopGBA: dropped,
+// even when it was ready to be written back); once corrected, a new one is due when the original starts one (the
+// IMU not initialized, or the map has fewer than 200 keyframes and is the only one): start_global_ba sends it.
 #include <cstdio>
 
 #include "algorithms/orb_loop_closing/correct_loop/correction.hpp"
@@ -25,6 +26,11 @@ public:
     Status start(fw::Write<map::Atlas> atlas, fw::Write<local_mapping::LocalMapper> mapper,
                  fw::Optional<ba::Problem>& ba_problem) {
         local_mapping::LocalMapper& m = *mapper;
+        if (m.gba.state != local_mapping::PendingGlobalBA::State::none) {
+            std::fprintf(stderr, "local_mapping: stopping the global BA of kf %lu\n", (unsigned long)m.gba.loop_kf);
+            ++m.gba_stopped;
+            m.gba = local_mapping::PendingGlobalBA{};
+        }
         if (m.loop.epoch != m.reset_epoch) return drop(*atlas, m, false);
         std::optional<ba::Problem> p = orb_loop_closing::beginCorrectLoop(*atlas, m.loop);
         if (!p) return drop(*atlas, m, true);
@@ -54,7 +60,14 @@ public:
                      (unsigned long)m.loop.keyframe, ba_result->iterations, ba_result->solve_ms);
         ++m.loops_corrected;
         if (const map::Map* M = a.findMap(m.loop.map))
-            if (!M->imu_initialized || (M->keyframes.size() < 200 && a.maps.size() == 1)) ++m.gba_wanted;
+            if (!M->imu_initialized || (M->keyframes.size() < 200 && a.maps.size() == 1)) {
+                local_mapping::PendingGlobalBA& g = m.gba;
+                g = local_mapping::PendingGlobalBA{};
+                g.state = local_mapping::PendingGlobalBA::State::due;
+                g.epoch = m.reset_epoch;
+                g.map = m.loop.map;
+                g.loop_kf = m.loop.keyframe;
+            }
         m.pending = local_mapping::PendingOptimization{};
         applyAfter(a, m);
         m.loop = local_mapping::PendingLoop{};

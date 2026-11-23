@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 #include "algorithms/ba_solver/inertial_residuals.hpp"
 #include "libs/nls/problem.hpp"
@@ -86,116 +87,149 @@ ba::Result solveInertialInit(const ba::Problem& p) {
     return r;
 }
 
-ba::Result solveFullInertial(const ba::Problem& p) {
-    ba::Result r;
-    r.seq = p.seq;
-    r.kind = p.kind;
+namespace {
 
-    nls::Problem prob;
-    const auto pose_m = std::make_shared<ImuPoseManifold>();
-    const std::size_t n = p.keyframes.size();
-    std::vector<std::array<double, 12>> poses(n);
-    std::vector<Eigen::Vector3d> vel(n), bgs(n), bas(n);
-    std::vector<int> pose_b(n), vel_b(n, -1), g_b(n, -1), a_b(n, -1);
-    for (std::size_t i = 0; i < n; ++i) {
-        const ba::KeyFrameState& k = p.keyframes[i];
-        imuPoseFrom(k.Tcw, k.T_cb, poses[i].data());
-        pose_b[i] = prob.addBlock(poses[i].data(), pose_m);
-        if (!k.inertial) continue;
-        vel[i] = k.velocity.cast<double>();
-        vel_b[i] = prob.addBlock(vel[i].data(), 3);
-        if (p.shared_bias) continue;
-        bgs[i] = k.bias.g.cast<double>();
-        bas[i] = k.bias.a.cast<double>();
-        g_b[i] = prob.addBlock(bgs[i].data(), 3);
-        a_b[i] = prob.addBlock(bas[i].data(), 3);
-    }
-    // bInit: one bias, from the last keyframe (pIncKF)
-    Eigen::Vector3d bg = Eigen::Vector3d::Zero(), ba = Eigen::Vector3d::Zero();
-    int sg_b = -1, sa_b = -1;
-    if (p.shared_bias && n > 0) {
-        bg = p.keyframes.back().bias.g.cast<double>();
-        ba = p.keyframes.back().bias.a.cast<double>();
-        sg_b = prob.addBlock(bg.data(), 3);
-        sa_b = prob.addBlock(ba.data(), 3);
-    }
-
-    const auto inertial_loss = huber(std::sqrt(16.92));
-    for (std::size_t i = 0; i < n; ++i) {
-        const ba::KeyFrameState& k = p.keyframes[i];
-        if (k.prev < 0 || !k.preintegrated) continue;
-        const std::size_t j = std::size_t(k.prev);
-        if (!k.inertial || !p.keyframes[j].inertial) continue;
-        const int g1 = p.shared_bias ? sg_b : g_b[j], a1 = p.shared_bias ? sa_b : a_b[j];
-        prob.addResidual(std::make_shared<InertialResidual>(k.preintegrated),
-                         {pose_b[j], vel_b[j], g1, a1, pose_b[i], vel_b[i]}, inertialInformation(*k.preintegrated),
-                         inertial_loss);
-        if (p.shared_bias) continue;
-        const Eigen::Matrix3d info_g = k.preintegrated->C.block<3, 3>(9, 9).cast<double>().inverse();
-        const Eigen::Matrix3d info_a = k.preintegrated->C.block<3, 3>(12, 12).cast<double>().inverse();
-        prob.addResidual(std::make_shared<BiasWalkResidual>(), {g_b[j], g_b[i]}, info_g);
-        prob.addResidual(std::make_shared<BiasWalkResidual>(), {a_b[j], a_b[i]}, info_a);
-    }
-    if (p.shared_bias && n > 0) {
-        prob.addResidual(std::make_shared<BiasPriorResidual>(Eigen::Vector3d::Zero()), {sa_b},
-                         Eigen::Matrix3d::Identity() * double(p.prior_a));
-        prob.addResidual(std::make_shared<BiasPriorResidual>(Eigen::Vector3d::Zero()), {sg_b},
-                         Eigen::Matrix3d::Identity() * double(p.prior_g));
-    }
-
-    // Points: those with an observation
-    std::vector<int> n_obs(p.points.size(), 0);
-    for (const ba::Observation& o : p.observations) ++n_obs[std::size_t(o.point)];
-    std::vector<Eigen::Vector3d> points(p.points.size());
-    std::vector<int> pt_b(p.points.size(), -1);
-    for (std::size_t i = 0; i < p.points.size(); ++i) {
-        if (n_obs[i] == 0) continue;
-        points[i] = p.points[i].pos.cast<double>();
-        pt_b[i] = prob.addBlock(points[i].data(), 3);
-        prob.setEliminated(pt_b[i]);
-    }
-    const float th_mono = std::sqrt(5.991);
-    const auto mono_loss = huber(th_mono);
-    // The cameras in the body, per keyframe
-    std::vector<std::array<Eigen::Matrix3d, 2>> Rcb(n);
-    std::vector<std::array<Eigen::Vector3d, 2>> tcb(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        cameraInBody(p.keyframes[i].T_cb, nullptr, Rcb[i][0], tcb[i][0]);
-        cameraInBody(p.keyframes[i].T_cb, &p.keyframes[i].Trl, Rcb[i][1], tcb[i][1]);
-    }
-    auto residuals = std::make_shared<std::vector<BodyReprojectionResidual>>();
-    residuals->reserve(p.observations.size());
-    for (const ba::Observation& o : p.observations) {
-        const std::size_t k = std::size_t(o.keyframe);
-        const int c = o.right ? 1 : 0;
-        const camera::StereoRig& rig = p.rigs[std::size_t(p.keyframes[k].rig)];
-        residuals->emplace_back(rig.camera(c), Rcb[k][std::size_t(c)], tcb[k][std::size_t(c)], o.uv.cast<double>());
-        prob.addResidual(std::shared_ptr<const nls::Residual>(residuals, &residuals->back()),
-                         {pose_b[k], pt_b[std::size_t(o.point)]}, Eigen::Matrix2d::Identity() * double(o.inv_sigma2),
-                         mono_loss);
-    }
-
-    nls::Options opt;
-    opt.max_iterations = p.iterations;
-    opt.initial_lambda = p.initial_lambda;
-    r.iterations = prob.solve(opt).iterations;
-
-    for (std::size_t i = 0; i < n; ++i) {
-        const ba::KeyFrameState& in = p.keyframes[i];
-        ba::KeyFrameState k;
-        k.id = in.id;
-        k.Tcw = cameraPoseOf(poses[i].data(), in.T_cb);
-        k.inertial = in.inertial;
-        if (in.inertial) {
-            k.velocity = vel[i].cast<float>();
-            k.bias = p.shared_bias ? biasOf(bg, ba) : biasOf(bgs[i], bas[i]);
+// FullInertialBA's problem, kept for solving in steps; its blocks point into the members (so it does not move)
+class FullInertialSolve final : public SteppedSolve {
+public:
+    explicit FullInertialSolve(ba::Problem in) : p_(std::move(in)) {
+        const ba::Problem& p = p_;  // the residuals keep references to its rigs' cameras
+        const std::size_t n = p.keyframes.size();
+        poses_.resize(n);
+        vel_.resize(n);
+        bgs_.resize(n);
+        bas_.resize(n);
+        std::vector<int> pose_b(n), vel_b(n, -1), g_b(n, -1), a_b(n, -1);
+        const auto pose_m = std::make_shared<ImuPoseManifold>();
+        for (std::size_t i = 0; i < n; ++i) {
+            const ba::KeyFrameState& k = p.keyframes[i];
+            imuPoseFrom(k.Tcw, k.T_cb, poses_[i].data());
+            pose_b[i] = prob_.addBlock(poses_[i].data(), pose_m);
+            if (!k.inertial) continue;
+            vel_[i] = k.velocity.cast<double>();
+            vel_b[i] = prob_.addBlock(vel_[i].data(), 3);
+            if (p.shared_bias) continue;
+            bgs_[i] = k.bias.g.cast<double>();
+            bas_[i] = k.bias.a.cast<double>();
+            g_b[i] = prob_.addBlock(bgs_[i].data(), 3);
+            a_b[i] = prob_.addBlock(bas_[i].data(), 3);
         }
-        r.keyframes.push_back(std::move(k));
+        // bInit: one bias, from the last keyframe (pIncKF)
+        int sg_b = -1, sa_b = -1;
+        if (p.shared_bias && n > 0) {
+            bg_ = p.keyframes.back().bias.g.cast<double>();
+            ba_ = p.keyframes.back().bias.a.cast<double>();
+            sg_b = prob_.addBlock(bg_.data(), 3);
+            sa_b = prob_.addBlock(ba_.data(), 3);
+        }
+
+        const auto inertial_loss = huber(std::sqrt(16.92));
+        for (std::size_t i = 0; i < n; ++i) {
+            const ba::KeyFrameState& k = p.keyframes[i];
+            if (k.prev < 0 || !k.preintegrated) continue;
+            const std::size_t j = std::size_t(k.prev);
+            if (!k.inertial || !p.keyframes[j].inertial) continue;
+            const int g1 = p.shared_bias ? sg_b : g_b[j], a1 = p.shared_bias ? sa_b : a_b[j];
+            prob_.addResidual(std::make_shared<InertialResidual>(k.preintegrated),
+                              {pose_b[j], vel_b[j], g1, a1, pose_b[i], vel_b[i]}, inertialInformation(*k.preintegrated),
+                              inertial_loss);
+            if (p.shared_bias) continue;
+            const Eigen::Matrix3d info_g = k.preintegrated->C.block<3, 3>(9, 9).cast<double>().inverse();
+            const Eigen::Matrix3d info_a = k.preintegrated->C.block<3, 3>(12, 12).cast<double>().inverse();
+            prob_.addResidual(std::make_shared<BiasWalkResidual>(), {g_b[j], g_b[i]}, info_g);
+            prob_.addResidual(std::make_shared<BiasWalkResidual>(), {a_b[j], a_b[i]}, info_a);
+        }
+        if (p.shared_bias && n > 0) {
+            prob_.addResidual(std::make_shared<BiasPriorResidual>(Eigen::Vector3d::Zero()), {sa_b},
+                              Eigen::Matrix3d::Identity() * double(p.prior_a));
+            prob_.addResidual(std::make_shared<BiasPriorResidual>(Eigen::Vector3d::Zero()), {sg_b},
+                              Eigen::Matrix3d::Identity() * double(p.prior_g));
+        }
+
+        // Points: those with an observation
+        std::vector<int> n_obs(p.points.size(), 0);
+        for (const ba::Observation& o : p.observations) ++n_obs[std::size_t(o.point)];
+        points_.resize(p.points.size());
+        pt_b_.assign(p.points.size(), -1);
+        for (std::size_t i = 0; i < p.points.size(); ++i) {
+            if (n_obs[i] == 0) continue;
+            points_[i] = p.points[i].pos.cast<double>();
+            pt_b_[i] = prob_.addBlock(points_[i].data(), 3);
+            prob_.setEliminated(pt_b_[i]);
+        }
+        const float th_mono = std::sqrt(5.991);
+        const auto mono_loss = huber(th_mono);
+        // The cameras in the body, per keyframe
+        Rcb_.resize(n);
+        tcb_.resize(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            cameraInBody(p.keyframes[i].T_cb, nullptr, Rcb_[i][0], tcb_[i][0]);
+            cameraInBody(p.keyframes[i].T_cb, &p.keyframes[i].Trl, Rcb_[i][1], tcb_[i][1]);
+        }
+        auto residuals = std::make_shared<std::vector<BodyReprojectionResidual>>();
+        residuals->reserve(p.observations.size());
+        for (const ba::Observation& o : p.observations) {
+            const std::size_t k = std::size_t(o.keyframe);
+            const int c = o.right ? 1 : 0;
+            const camera::StereoRig& rig = p.rigs[std::size_t(p.keyframes[k].rig)];
+            residuals->emplace_back(rig.camera(c), Rcb_[k][std::size_t(c)], tcb_[k][std::size_t(c)], o.uv.cast<double>());
+            prob_.addResidual(std::shared_ptr<const nls::Residual>(residuals, &residuals->back()),
+                              {pose_b[k], pt_b_[std::size_t(o.point)]},
+                              Eigen::Matrix2d::Identity() * double(o.inv_sigma2), mono_loss);
+        }
+
+        nls::Options opt;
+        opt.max_iterations = p.iterations;
+        opt.initial_lambda = p.initial_lambda;
+        prob_.start(opt);
     }
-    for (std::size_t i = 0; i < p.points.size(); ++i)
-        if (pt_b[i] >= 0) r.points.push_back({p.points[i].id, points[i].cast<float>(), false});
-    r.ok = true;
-    return r;
+
+    void step() override { prob_.step(); }
+    bool finished() const override { return prob_.finished(); }
+    int iterations() const override { return prob_.summary().iterations; }
+
+    ba::Result result() const override {
+        const ba::Problem& p = p_;
+        ba::Result r;
+        r.seq = p.seq;
+        r.kind = p.kind;
+        r.iterations = iterations();
+        for (std::size_t i = 0; i < p.keyframes.size(); ++i) {
+            const ba::KeyFrameState& in = p.keyframes[i];
+            ba::KeyFrameState k;
+            k.id = in.id;
+            k.Tcw = cameraPoseOf(poses_[i].data(), in.T_cb);
+            k.inertial = in.inertial;
+            if (in.inertial) {
+                k.velocity = vel_[i].cast<float>();
+                k.bias = p.shared_bias ? biasOf(bg_, ba_) : biasOf(bgs_[i], bas_[i]);
+            }
+            r.keyframes.push_back(std::move(k));
+        }
+        for (std::size_t i = 0; i < p.points.size(); ++i)
+            if (pt_b_[i] >= 0) r.points.push_back({p.points[i].id, points_[i].cast<float>(), false});
+        r.ok = true;
+        return r;
+    }
+
+private:
+    ba::Problem p_;  // the preintegrations and rigs the residuals refer to
+    nls::Problem prob_;
+    std::vector<std::array<double, 12>> poses_;
+    std::vector<Eigen::Vector3d> vel_, bgs_, bas_;
+    Eigen::Vector3d bg_ = Eigen::Vector3d::Zero(), ba_ = Eigen::Vector3d::Zero();
+    std::vector<Eigen::Vector3d> points_;
+    std::vector<int> pt_b_;
+    std::vector<std::array<Eigen::Matrix3d, 2>> Rcb_;
+    std::vector<std::array<Eigen::Vector3d, 2>> tcb_;
+};
+
+}  // namespace
+
+std::unique_ptr<SteppedSolve> startFullInertial(ba::Problem p) {
+    return std::make_unique<FullInertialSolve>(std::move(p));
 }
+
+ba::Result solveFullInertial(const ba::Problem& p) { return solveAll(*startFullInertial(p)); }
 
 }  // namespace ba_solver

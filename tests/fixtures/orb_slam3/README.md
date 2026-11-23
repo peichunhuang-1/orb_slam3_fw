@@ -517,6 +517,30 @@ stopped.
 The port matches to float rounding: poses about 1e-5°, points about 1e-6 m, while the graph moves keyframes by
 15–18 cm. The fusion (which keyframe feature holds which point, which points went bad) matches exactly.
 
+**Global BA case** (`gba`, generated 2026-11-23; same test): `correct` with the IMU not initialized and only one
+map, so the original's `CorrectLoop` starts its global BA thread. That is `RunGlobalBundleAdjustment`: the visual
+`GlobalBundleAdjustemnt(map, 10, ..., the current keyframe, bRobust = false)`, then the write-back down the spanning
+tree. The generator waits for that thread to finish (`isFinishedGBA`). Two changes from `correct`, both so that
+the write-back does what it does in SLAM:
+- **A proper spanning tree.** The scene connects all keyframes at once, so `UpdateConnections` can make a later
+  keyframe the parent, and the tree has cycles that the walk from the origin never reaches. Here each keyframe's
+  parent is instead its strongest covisible among the earlier ones.
+- **An origin.** Keyframe 0 is in `mvpKeyFrameOrigins` (Tracking puts it there; nothing else in this scene does).
+
+The local mapper is also `finished`, so the write-back's `RequestStop` does not wait for a `Stop()` that no
+thread would make.
+
+- Extra input: `gba_kf` (`nLoopKF`).
+- Outputs: the `after_*` tables, now taken after the global BA's write-back.
+
+The port runs the correction, `globalBAProblem`, the `global` kind solved in steps, and `applyGlobalBA`. Poses match
+to 4e-5° and 2e-7 m, and points to 5e-5 m, while the global BA moves keyframes by up to 12 cm.
+
+That needed one quirk of the original: the visual BA counts a point's observing keyframes (`nEdges`), not its
+edges. A point seen only in right images, whose observations the right-index check all drops, stays in with no
+edge and is written back unchanged. `FullInertialBA` leaves such a point out (`bAllFixed`), so there it follows its
+reference keyframe instead.
+
 **Reproducibility:** `Sim3Solver` samples with `rand()`, so its hypothesis, and everything downstream of it, varies
 from run to run (the original's `rand()` versus the port's `std::mt19937`). `OptimizeSim3` differentiates
 numerically through the KB8 projection's float internals, which makes its path chaotic. The test compares these

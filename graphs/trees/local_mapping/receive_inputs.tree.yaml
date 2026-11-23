@@ -1,15 +1,17 @@
 # What arrived in this tick: tracking's atlas edits (InsertKeyFrame, RequestReset, RequestResetActiveMap), its
-# InterruptBA, loop closing's changes, and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
+# InterruptBA, loop closing's changes, gba_solver's step of the global BA, and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
 # the keys keep the last edits and command.
 version: 1
 inputs:
   atlas_edits: { type: tracking/AtlasEdits }
   mapper_cmd: { type: tracking/MapperCommand }
   loop_result: { type: loop_closing/LoopResult }
+  gba_result: { type: ba/Result }
   params:     { type: OrbTrackingParams }
 outputs:
   inertial: { type: fw/bool }
   mapper:   { type: tracking/MapperStatus }
+  gba_continue: { type: ba/Continue }
 resources:   # the parent's of the same name
   atlas:        { type: map/Atlas }
   local_mapper: { type: local_mapping/LocalMapper }
@@ -32,4 +34,9 @@ root:
             SkipUnlessUpdated:
               entry: loop_result
               child: { apply_loop_result: { loop_result: "{loop_result}" } }
+      - ForceSuccess:
+          child:
+            SkipUnlessUpdated:
+              entry: gba_result
+              child: { step_global_ba: { gba_result: "{gba_result}", gba_continue: "{gba_continue}" } }
       - publish_mapper_status: { mapper: "{mapper}" }

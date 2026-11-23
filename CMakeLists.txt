@@ -30,7 +30,8 @@ set_target_properties(nls PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE)
   target_compile_options(nls PRIVATE -O2)
 endif()
-#   build/orb_slam3_fw/nls_test   libs/nls on synthetic problems (SE3 update, curve fit, BA Schur vs plain, Huber)
+#   build/orb_slam3_fw/nls_test   libs/nls on synthetic problems (SE3 update, curve fit, BA Schur vs plain, Huber,
+#                                 solve() in steps)
 add_executable(nls_test tests/nls/nls_test.cpp)
 target_link_libraries(nls_test nls)
 if(BUILD_TESTING)
@@ -184,6 +185,7 @@ set(orb_local_mapping_keyframe_culling_test_SOURCES algorithms/orb_local_mapping
 set(orb_local_mapping_local_ba_test_SOURCES algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.cpp
     algorithms/ba_solver/local_ba.cpp)
 set(orb_local_mapping_imu_init_test_SOURCES algorithms/orb_local_mapping/initialize_imu/imu_init.cpp
+    algorithms/orb_local_mapping/shared/global_ba.cpp
     algorithms/orb_local_mapping/shared/process_keyframe.cpp algorithms/ba_solver/inertial.cpp
     algorithms/ba_solver/inertial_residuals.cpp)
 set(orb_local_mapping_local_inertial_ba_test_SOURCES algorithms/orb_local_mapping/local_bundle_adjustment/local_ba.cpp
@@ -203,9 +205,11 @@ endforeach()
 # orb_loop_closing tests (not installed): build/orb_slam3_fw/orb_loop_closing_<name>_test
 #   place_recognition  keyframe_candidates, keyframe_matching, relative_pose_ransac, optimize_relative_pose,
 #                      place_recognition vs tests/fixtures/orb_slam3/loop
-#   correct_loop       correct_loop/correction + ba_solver's pose graph kinds vs tests/fixtures/orb_slam3/loop/correct*
+#   correct_loop       correct_loop/correction + ba_solver's pose graph kinds vs tests/fixtures/orb_slam3/loop/correct*;
+#                      then global_ba + ba_solver's global kind vs loop/gba
 set(orb_loop_closing_correct_loop_test_SOURCES algorithms/orb_loop_closing/correct_loop/correction.cpp
-    algorithms/ba_solver/pose_graph.cpp)
+    algorithms/ba_solver/pose_graph.cpp algorithms/orb_loop_closing/global_ba/global_ba_ops.cpp
+    algorithms/orb_local_mapping/shared/global_ba.cpp algorithms/ba_solver/global_ba.cpp)
 set(orb_loop_closing_place_recognition_test_SOURCES
     algorithms/orb_loop_closing/keyframe_candidates/keyframe_candidates.cpp
     algorithms/orb_loop_closing/keyframe_matching/keyframe_matching.cpp

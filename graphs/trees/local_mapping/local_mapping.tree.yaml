@@ -1,6 +1,7 @@
 # ORB-SLAM3 local mapping (KB8 stereo / stereo-inertial): LocalMapping::Run() driven by ticks instead of a thread.
 # Ticks: atlas edits from tracking (InsertKeyFrame, resets), a command from tracking (interrupt BA), and the
-# result of an optimization ba_solver computed outside the lock (wake), and loop closing's changes (wake).
+# result of an optimization ba_solver computed outside the lock (wake), loop closing's changes (wake), and each
+# step of the global BA gba_solver computes (wake).
 # Design: algorithms/orb_local_mapping/docs/DESIGN.md
 version: 1
 inputs:
@@ -8,6 +9,7 @@ inputs:
   mapper_cmd: { type: tracking/MapperCommand, mode: trigger, queue: { depth: 8, policy: drop_oldest } }
   ba_result:  { type: ba/Result, mode: wake, queue: { depth: 2, policy: drop_oldest } }
   loop_result: { type: loop_closing/LoopResult, mode: wake, queue: { depth: 16, policy: drop_oldest } }  # loop closing's changes
+  gba_result: { type: ba/Result, mode: wake, queue: { depth: 2, policy: drop_oldest } }  # gba_solver: global BA steps
   tracking:   { type: tracking/Status }             # latest: tracking's state and inliers (mpTracker)
   params:     { type: OrbTrackingParams }           # latest: the sensor
   vocabulary: { type: map/Vocabulary }             # latest: ComputeBoW (orb_vocabulary:// plugin)
@@ -15,6 +17,8 @@ outputs:
   mapper:        { type: tracking/MapperStatus }    # -> tracking.mapper
   ba_problem:    { type: ba/Problem }               # -> ba_solver.problem
   loop_keyframe: { type: loop_closing/LoopKeyFrame } # -> loop_closing.keyframe
+  gba_problem:   { type: ba/Problem }               # -> gba_solver.problem
+  gba_continue:  { type: ba/Continue }              # -> gba_solver.continue
 resources:
   atlas:        { type: map/Atlas }                 # shared with tracking
   local_mapper: { type: local_mapping/LocalMapper } # LocalMapping's members
@@ -25,7 +29,8 @@ root:
     children:
       # Every tick, even while an optimization is running further down
       - SubTree: { tree: trees/local_mapping/receive_inputs.tree.yaml, name: receive_inputs, atlas_edits: "{atlas_edits}",
-                   mapper_cmd: "{mapper_cmd}", loop_result: "{loop_result}", params: "{params}", inertial: "{inertial}", mapper: "{mapper}" }
+                   mapper_cmd: "{mapper_cmd}", loop_result: "{loop_result}", gba_result: "{gba_result}", params: "{params}",
+                   inertial: "{inertial}", mapper: "{mapper}", gba_continue: "{gba_continue}" }
       # Run()'s while(1): one keyframe per round, in this tick, until the queue is empty or a step waits
       - ForceSuccess:
           child:
@@ -38,9 +43,9 @@ root:
                     - SubTree: { tree: trees/local_mapping/process_keyframe.tree.yaml, name: process_keyframe, vocabulary: "{vocabulary}",
                                  inertial: "{inertial}", tracking: "{tracking}", ba_result: "{ba_result}",
                                  mapper: "{mapper}", ba_problem: "{ba_problem}", loop_keyframe: "{loop_keyframe}" }
-      # Loop closing's correction once the keyframe in hand is done (RequestStop .. Release)
+      # Loop closing's correction and the global BA's write-back once the keyframe in hand is done (RequestStop .. Release)
       - ForceSuccess:
           child:
             SubTree: { tree: trees/local_mapping/correct_map.tree.yaml, name: correct_map, vocabulary: "{vocabulary}",
-                       ba_result: "{ba_result}", ba_problem: "{ba_problem}" }
+                       ba_result: "{ba_result}", ba_problem: "{ba_problem}", gba_problem: "{gba_problem}" }
       - mapper_idle: { mapper: "{mapper}" }

@@ -2,14 +2,14 @@
 
 這份文件定架構（圖上怎麼連、誰寫 `atlas`、local mapping 的樹怎麼加、資料放在哪裡），並分階段記錄實作與驗證。沿用 [local mapping 的設計](../../orb_local_mapping/docs/DESIGN.md)與 [tracking 的設計](../../orb_tracking/docs/DESIGN.md#原則)的原則（以 id 引用、型別只放資料、程式碼依使用者放置、長時間運算在鎖外），不再重複。
 
-**目前的狀態**：階段 2 完成（loop 會修正；global BA 與地圖合併還沒做）。
+**目前的狀態**：階段 3 完成（loop 會修正，修正後跑 global BA；地圖合併還沒做）。
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
 | 0 | 骨架：`loop_closing` block、`loop_result`（`wake`）、`send_to_loop_closing` 把 keyframe 加進 BoW 索引；`wake` 與 job 結束的試驗；`frame_gate` 只丟影像的試驗 | 完成（見下） |
 | 1 | place recognition：候選、keyframe 間的匹配、`RelativePoseRansac`、`optimizeRelativePose`、三次確認（loop 與 merge 都偵測，只偵測不修正） | 完成（見下） |
 | 2 | `CorrectLoop`：Stop／Release、`SearchAndFuse`、essential graph（6DoF、4DoF） | 完成（見下） |
-| 3 | global BA：`gba_solver`、分段迭代、寫回時沿 spanning tree 傳遞 | 未開始 |
+| 3 | global BA：`gba_solver`、分段迭代、寫回時沿 spanning tree 傳遞 | 完成（見下） |
 | 4 | 地圖合併：`MergeLocal`（stereo）、`MergeLocal2`（stereo-inertial）、`MergeInertialBA`；`slam_merge_job` | 未開始 |
 
 **階段 0 的實跑**（Pi 5，V1_02_medium，lockstep；以暫時的追蹤輸出觀察，之後已移除）：
@@ -58,13 +58,38 @@
   - `Release` 不刪除停止期間排進佇列的 keyframe（原版會刪）。tracking 看到停止就不建 keyframe，只有晚一個 tick 的狀態放進來的少數幾個，這裡照常處理。
   - 區域重設的 `SetErase`（原版在 `CorrectLoop` 之後，那時 loop edge 已經加上）等修正完才套用（`LoopResult::erase_after_correction`）。若在修正之前套用，可能把 matched keyframe 刪掉。
   - 不修正的 loop：已經有一個在等修正（`loops_busy`）、偵測之後地圖有過 big change（`loops_stale`：偵測看到的位姿已經過時；原版偵測與修正在同一個執行緒，不會發生）、目前或 matched keyframe 已經 bad（`loops_gone`）。這三種都只套用旗標。
-  - 修正完原版會啟動 global BA（IMU 未初始化，或地圖少於 200 個 keyframe 且只有一張地圖）。這是階段 3，目前只計數（`gba_wanted`）。
+  - 修正完原版會啟動 global BA（IMU 未初始化，或地圖少於 200 個 keyframe 且只有一張地圖）：階段 3 已做（見下）。
 - fixture（`loop/correct.txt`、`correct_4dof.txt`，原版的 `CorrectLoop`；場景見 fixtures 的 README）：
   - keyframe 的點（loop fusion 與 `SearchAndFuse` 的結果）與點的 bad 旗標完全相同。
   - 位姿差 1e-5°、3e-7 m，速度差 4e-7，點差 4e-6 m；essential graph 移動 keyframe 達 15–18 cm。
 - V1_02 實跑：
   - 照常沒有偵測到 loop，ATE 與階段 1 完全相同（lockstep 是確定的）：odom 0.0935 m，`--frame map --from 20` 0.023 m。
   - 暫時放寬偵測（投影門檻 80 → 40、確認 3 次 → 1 次，跑完已改回）：kf 311 與 134 的 loop 走完整條修正（4DoF，67 個 keyframe、154 條邊，5 次迭代，6.1 ms），job 照常自己結束，ATE 0.0932 m，與不修正時幾乎相同（真的回訪，修正很小）。另一個 loop 被 inertial 的 roll／pitch 檢查擋下（BAD LOOP）。
+
+**階段 3**：
+
+- 程式：
+  - `libs/nls`：`start`／`step`／`finished`／`summary`，`solve()` 改由它們組成（見「global BA：分段迭代」）。
+  - `ba_solver/stepped.hpp`（`SteppedSolve`）、`ba_solver/global_ba.{hpp,cpp}`（新的 `global` 種類）、`inertial.cpp` 的 `full_inertial` 改成可分段；`ba_solver/gba_solver.cpp`（`GbaSolver` block）。
+  - `orb_local_mapping/shared/global_ba.{hpp,cpp}`：整張地圖的問題（`mapKeyFrames`、`addMapPoints`）與寫回（`storeGlobalBA`、`propagateGlobalBA`），從 `initialize_imu/imu_init` 抽出，兩邊共用。
+  - `orb_loop_closing/global_ba/global_ba_ops.{hpp,cpp}`（`globalBAProblem`、`applyGlobalBA`）；葉節點 `start_global_ba`、`step_global_ba`、`apply_global_ba`；`orb_local_mapping/stop_mapping`（`Stop()` 從 `empty_queue` 分出來）。
+  - `local_mapper.gba`（`PendingGlobalBA`）、計數 `gba_started`、`gba_stopped`、`gba_applied`、`gba_dropped`；訊息 `ba/Continue`、`ba::Result::partial`；兩張 job 圖加上 `gba_solver` 與三條邊。
+- 照原版保留的怪處：
+  - 視覺的 GBA：左影像的邊沒有 robust kernel，右影像的有（δ = √5.99）。
+  - 視覺的 GBA 的 `nEdges` 數的是看到它的 keyframe，不是邊：右影像的觀測全被 index 檢查丟掉的點仍在問題裡（沒有邊），寫回時位置不變。`FullInertialBA` 則把這種點拿掉，寫回時跟著參考 keyframe 修正。
+  - inertial 的 GBA 不固定任何頂點，gauge（x、y、z、yaw）由 LM 的阻尼決定，整張地圖會一起平移（見下面的實跑）。
+  - 寫回時點不做 `UpdateNormalAndDepth`。
+- 和原版不同的地方：
+  - GBA 在 `gba_solver` 上一次一個迭代；local mapping 在兩個迭代之間決定要不要繼續（原版 g2o 每個迭代之間看 `mbStopGBA`，粒度相同）。
+  - 結果到了先存著，等 local mapping 停下才寫回（原版的 GBA 執行緒自己 `RequestStop`、等 `isStopped`）。寫回之前若有 loop 要修正，GBA 被丟掉（原版此時多半也已 `mbStopGBA`）。
+  - GBA 的寫回不做 `EmptyQueue`（原版也不做；之前的 `empty_queue` 會一併 Stop，所以分成 `empty_queue`、`stop_mapping`）。
+  - job 結束時進行中的 GBA 被丟掉（`wake`）；原版 `Shutdown` 會等它跑完。
+- fixture（`loop/gba.txt`，原版的 `CorrectLoop` 加上它開的 `RunGlobalBundleAdjustment`；場景見 fixtures 的 README）：修正、`globalBAProblem`、分段解 `global`、`applyGlobalBA` 之後，位姿差 4e-5°、2e-7 m，點差 5e-5 m；GBA 把 keyframe 移動了最多 12 cm。`full_inertial` 與沿 spanning tree 的寫回另由 `imu_init` 的 fixture 比對（改成共用的程式之後結果不變）。`nls_test`：分段與一次跑完逐位元相同。
+- V1_02 實跑：
+  - 照常沒有偵測到 loop，ATE 與階段 1、2 完全相同（odom 0.0935 m，`--frame map --from 20` 0.023 m）。
+  - 暫時放寬偵測（同階段 2，跑完已改回）：kf 311 與 134 的 loop 修正後啟動 full inertial 的 GBA（67 個 keyframe、2,618 個點、9,623 個觀測），`gba_solver` 7 次迭代共 265 ms，寫回 10.6 ms，從開始到寫回 0.3 s；job 照常自己結束。
+  - 這次的 ATE：odom 0.0923 m（階段 2 同一個 loop、沒有 GBA：0.0932），但 `--frame map --from 20` 從 0.025 m 變成 0.135 m。原因是 gauge：寫回的那一刻（68.3 s）map 座標的軌跡跳了 28 cm；寫回前、後兩段各自對齊時 ATE 只有 0.023 m 與 0.015 m，兩段的對齊差 0.15° 與約 30 cm（大多在 z）。也就是 GBA 沒有把地圖弄歪，而是整張地圖一起平移了。原版 `FullInertialBA` 同樣不固定任何頂點：`imu_init` 的 fixture 裡原版自己的 full BA 讓 keyframe 中心幾乎一致地移動了 7、41、18 cm。這次的 0.3 s 很短，耗時不是問題，所以平行化（下面「耗時」的 1–3）先不做。
+  - 待決定：照原版保留 gauge 的平移，或在 GBA 裡固定一個 keyframe 的位姿（與原版不同，但 map 座標不會跳）。
 
 **驗收**：V1_02 上整條軌跡的 ATE 與原版相近、loop 的次數相近。中間狀態不要求一致（原版的三條執行緒時序本身不固定）。函式層以 `fixture_gen` 的答案比對，是為了除錯，不是驗收條件。
 
@@ -201,25 +226,39 @@ merge: matched_kf、Tcw（mg2oMergeScw）、Tmw（mg2oMergeSmw）、
 fw 的同一個 block 的 handler 不會同時執行，也沒有中斷一次呼叫的機制（[api_guide.md](../../../api_guide.md) 第 4 節：「同一個 block 實例的所有 handler 絕對不會同時執行」），所以 stop 的輸入在 solver 算完之前收不到。改成每次呼叫只跑一次迭代，由 local mapping 決定要不要繼續：
 
 ```
-local_mapping                                   gba_solver（問題留在成員裡）
-  啟動 GBA：  ──gba_problem{seq, kind, …}──►      建 nls 問題，跑 1 次迭代 ──gba_result{seq, partial}──►
-  partial 到了，沒有新的 loop： ──gba_continue{seq}──►   再跑 1 次 ──partial──►
+local_mapping                                              gba_solver（GbaSolver，問題留在成員裡）
+  CorrectLoop 修正完，原版會開 GBA：gba = due
+  start_global_ba：建問題 ──gba_problem{seq, global | full_inertial}──►  建 nls 問題，跑 1 次迭代 ──gba_result{seq, partial}──►
+  step_global_ba：partial、seq 相同 ──gba_continue{seq}──►              再跑 1 次 ──partial──►
   ……
-  最後一次（10 次或收斂）：                                       ──gba_result{seq, final, 狀態}──►
-  有新的 loop／merge：不送 continue，換掉 seq（原版的 mbStopGBA、mnFullBAIdx）
+  最後一次（迭代數到了，或 LM 的停止條件）：                              ──gba_result{seq, 結果}──►
+  step_global_ba：存下結果，gba = ready，RequestStop
+  correct_map：apply_global_ba 寫回
+  下一個 loop 的 CorrectLoop 一開始：gba 清掉（mbStopGBA），之後的 partial 不再回 continue
 ```
 
 - 中止的粒度是一次迭代，與原版 g2o 每次迭代之間看 `mbStopGBA` 相同（視覺 10 次、inertial 7 次）。
-- `gba_solver` 收到 seq 不同的 `gba_problem` 就丟掉手上的問題；`continue` 的 seq 對不上就忽略。
-- `partial` 只帶序號與迭代次數，不帶狀態，不寫回。
-- **nls 要能接著算**：λ、上一次的 cost、「連續 3 次下降不到千分之一」的計數、`analyzePattern` 的結果都要保留在 `nls::Problem` 裡跨呼叫（新的 `solveSome(n)` 之類的介面）。結果必須與一次跑完相同，`nls_test` 加一個比對。
-- `ba_solver` 也用同一個 class，只是它收到的問題都一次跑完（不送 partial）。
+- `gba_solver` 收到新的 `gba_problem` 就丟掉手上的問題；`continue` 的 seq 對不上就忽略。
+- `partial` 只帶 seq、kind、迭代次數、到目前的耗時，不帶狀態，不寫回。
+- **nls 接著算**：`nls::Problem` 的 `start(options)`、`step()`、`finished()`、`summary()`，λ、ν、上一次的 cost、小步的計數都留在 `Problem` 裡跨呼叫；`solve()` 就是 `start` 再一直 `step`，所以分段與一次跑完是同一段程式。`nls_test` 比對過（參數與 summary 逐位元相同，含小步停止與 Huber）。
+- `ba_solver` 的種類都一次跑完；`gba_solver` 是另一個 class（`GbaSolver`，同一個資料夾，共用解題的程式：`ba_solver/stepped.hpp` 的 `SteppedSolve`）。同一個 class 的話，`ba_solver` 那個實例的 `continue` 埠沒接，fw 每次啟動都會警告。
 
-**寫回**（原版 `RunGlobalBundleAdjustment` 的後半）：`final` 的結果先存在 `local_mapper.gba`，在 local mapping 下一次停下時寫回：最佳化過的 keyframe 直接設；之後才加入的 keyframe 從 `keyframe_origins` 沿 spanning tree 傳遞修正（與 `initialize_imu` 第 3 階段相同，抽成共用函式）；點依 `mnBAGlobalForKF` 或參考 keyframe 修正；`InformNewBigChange`、`IncreaseChangeIndex`。
+**種類**：
+
+| | IMU 未初始化 | IMU 已初始化 |
+|---|---|---|
+| 原版 | `GlobalBundleAdjustemnt(map, 10, &mbStopGBA, nLoopKF, false)` | `FullInertialBA(map, 7, false, nLoopKF, &mbStopGBA)` |
+| kind | `global`（新） | `full_inertial`（已有，IMU 初始化也用） |
+| 固定 | 地圖的 init keyframe | 沒有（gauge 由 LM 的阻尼決定，與原版相同） |
+| 邊 | 左影像的沒有 robust kernel（`bRobust = false`），右影像的一律 Huber √5.99 | 重投影 Huber √5.991，inertial Huber √16.92，每個 keyframe 各自的 bias 與 random walk |
+| λ | g2o 預設（1e-5 × 最大對角） | 1e-5 |
+
+**寫回**（原版 `RunGlobalBundleAdjustment` 的後半，`global_ba/global_ba_ops.hpp` 的 `applyGlobalBA`）：final 的結果整個留在 `local_mapper.gba`，寫回時才存成各 keyframe／點的 GBA 暫存（`mTcwGBA`、`mPosGBA`、`mnBAGlobalForKF`），再從 `keyframe_origins` 沿 spanning tree 傳遞（`orb_local_mapping/shared/global_ba` 的 `propagateGlobalBA`，與 `initialize_imu` 第 3 階段共用）；之後才加入的 keyframe 跟著 parent 的修正；點依 GBA 的位置或參考 keyframe 修正；`InformNewBigChange`、`IncreaseChangeIndex`。不寫回（`gba_dropped`）：reset 之後、地圖不在了、視覺的 GBA 期間 IMU 初始化了（原版的 `!bImuInit && isImuInitialized()`）。
+暫存到寫回時才存，是因為 IMU 初始化的 full inertial BA 用同一組暫存：GBA 跑的期間若有一次 IMU 初始化寫回，先存的話會被它蓋掉。
 
 **啟動條件**照原版：`!isImuInitialized() || (KeyFramesInMap() < 200 && CountMaps() == 1)`。
 
-**耗時**（Pi 5，要量）：寫回的成本已在 [atlas 設計](../../../types/map/docs/DESIGN.md#第-0-步效能實測)量過：每個點都改一次，1 萬點 7.8 ms、5 萬點 28.7 ms，相對於 GBA 本身的秒級計算可以忽略，而且 tracking 不等。真正貴的是解 BA，nls 目前是單執行緒。階段 3 先量，再決定：
+**耗時**（Pi 5；階段 3 量到的：67 個 keyframe、2,618 個點，7 次迭代 265 ms，寫回 10.6 ms）：寫回的成本已在 [atlas 設計](../../../types/map/docs/DESIGN.md#第-0-步效能實測)量過：每個點都改一次，1 萬點 7.8 ms、5 萬點 28.7 ms，相對於 GBA 本身的秒級計算可以忽略，而且 tracking 不等。真正貴的是解 BA，nls 目前是單執行緒。V1_02 上 GBA 只在地圖少於 200 個 keyframe 時跑，所以先不做下面這些：
 
 1. nls 的殘差、Jacobian、每個點的 Schur 區塊用 `fw::parallel_for`，`gba_solver` 設 `THREADS(2–3)`（Pi 5 有 4 核，扣掉 extractor 與 tracking）。local BA 也會跟著變快。
 2. 寫回時跳過位置幾乎沒變的點（不 `edit` 就不複製 tile）。
@@ -227,34 +266,38 @@ local_mapping                                   gba_solver（問題留在成員�
 
 ## local mapping 的樹
 
-階段 2 的樹（`+` 是之後的階段要加的）：
+階段 3 的樹（`+` 是階段 4 要加的）：
 
 ```
 local_mapping
 └ ReactiveSequence
   ├ SubTree receive_inputs
-  │   + ForceSuccess( SkipUnlessUpdated(loop_result) → apply_loop_result )
-  │   + ForceSuccess( SkipUnlessUpdated(gba_result)  → step_global_ba )            （階段 3）
+  │   ForceSuccess( SkipUnlessUpdated(loop_result) → apply_loop_result )
+  │   ForceSuccess( SkipUnlessUpdated(gba_result)  → step_global_ba )      partial：送 gba_continue；final：ready、RequestStop
   ├ ForceSuccess( Repeat(-1)( Sequence[ has_new_keyframe, SubTree process_keyframe ] ) )
   │                                   has_new_keyframe 多一個條件：!stop_requested
   ├ ForceSuccess
   │ └ SubTree correct_map
   │   └ Sequence
-  │     ├ stop_requested              有 loop 要修正（之後：merge、GBA 的結果要寫回）
-  │     ├ empty_queue                 EmptyQueue：佇列中的 keyframe 只做 ProcessNewKeyFrame；然後 Stop()：stopped
-  │     ├ ForceSuccess( Sequence[ is_loop_pending, CorrectLoop ] )   stateful：beginCorrectLoop → pose_graph(_4dof) → endCorrectLoop
+  │     ├ stop_requested              有 loop 要修正，或 GBA 的結果要寫回（之後：merge）
+  │     ├ ForceSuccess( Sequence[ is_loop_pending, empty_queue ] )   EmptyQueue：只在修正 loop 之前（GBA 的寫回不清佇列）
+  │     ├ stop_mapping                Stop()：stopped
+  │     ├ ForceSuccess( Sequence[ is_loop_pending, CorrectLoop ] )   stateful：停掉進行中的 GBA；beginCorrectLoop →
+  │     │                                                            pose_graph(_4dof) → endCorrectLoop；GBA 是否 due
   │     │ + Sequence[ is_pending{merge}, MergeMaps ]                 （階段 4）
-  │     │ + Sequence[ is_pending{gba},   apply_global_ba ]           （階段 3）
+  │     ├ start_global_ba             due 的 GBA：建問題送給 gba_solver（沒有就什麼都不做）
+  │     ├ apply_global_ba             ready 的 GBA：寫回（沒有就什麼都不做）
   │     └ release_stop                Release：stop_requested = false、stopped = false
   └ mapper_idle                       ResetIfRequested、SetAcceptKeyFrames(true)
 ```
 
 - **`apply_loop_result`**（同步，`receive_inputs` 裡）：`epoch` 對不上就丟。`erase_flags` 照順序套用，keyframe 已經是 bad 的跳過。`kind` 是 loop 時，若沒有別的 loop 在等、地圖的 big change 與偵測時相同、目前與 matched keyframe 都還是 good，就記成 pending（`local_mapper.loop`），並設 `stop_requested`、`abort_ba`（`RequestStop`），`erase_after_correction` 之後的旗標留到修正完。否則計數，旗標全部立刻套用。
 - **`CorrectLoop`**（`correct_loop/`）：start 做同步部分、送出位姿圖，RUNNING；收到同一個 seq 的結果就寫回，再套用留下的旗標。期間有 reset（`reset_epoch` 改變）就丟掉。
-- **`step_global_ba`**（階段 3，同步）：partial 時送 `gba_continue`；final 時存結果、設 pending gba 與 `stop_requested`。若期間來了新的 loop，`CorrectLoop` 已換掉 seq，舊的結果在這裡被丟掉。
+- **`step_global_ba`**（同步）：seq 與進行中的 GBA 相同時，partial 就送 `gba_continue`；final 就存下結果（`local_mapper.gba`，ready），設 `stop_requested`、`abort_ba`。之後來了新的 loop 時，`CorrectLoop` 已清掉 GBA，舊的結果在這裡被丟掉，`gba_solver` 收不到 continue，就停在那一次迭代。
+- **`start_global_ba`／`apply_global_ba`**（同步，`correct_map` 裡）：前者在 `CorrectLoop` 剛修正完的同一次停止裡送出問題（原版在 `CorrectLoop` 結尾開 GBA 執行緒）；後者在 GBA 的結果到了之後的下一次停止寫回。同時有 loop 要修正時，`CorrectLoop` 先停掉 GBA，ready 的結果也丟掉（原版的 `mbStopGBA`；先寫回 GBA 的話，loop 偵測時的位姿就過時了）。
 - **RUNNING 只出現在 `CorrectLoop`（之後還有 `MergeMaps`）**，都是在等 `ba_solver`。這期間 `has_new_keyframe` 為 false（`stop_requested`），tracking 看到 `stopped`／`stop_requested` 就不建 keyframe（`need_new_keyframe` 已經這樣判斷），與原版 LM 停著時相同。process_keyframe 還在 RUNNING（等 local BA）時，ReactiveSequence 不會走到 `correct_map`，所以已送出的 local BA 先寫回才修正。
 - **GBA 本身不是 RUNNING**：它在 `gba_solver` 上跑好幾秒，期間 local mapping 照常處理 keyframe（原版也是），只有寫回時停一下。
-- 葉節點的位置：Stop／EmptyQueue／Release 是 `LocalMapping` 的方法，放在 `algorithms/orb_local_mapping/`（`stop_requested`、`empty_queue`、`release_stop`）；`is_loop_pending`、`CorrectLoop` 的邏輯是 loop closing 的，放在 `algorithms/orb_loop_closing/`。
+- 葉節點的位置：Stop／EmptyQueue／Release 是 `LocalMapping` 的方法，放在 `algorithms/orb_local_mapping/`（`stop_requested`、`empty_queue`、`stop_mapping`、`release_stop`）；`is_loop_pending`、`CorrectLoop`、`start_global_ba`、`step_global_ba`、`apply_global_ba` 的邏輯是 loop closing 的，放在 `algorithms/orb_loop_closing/`。
 
 ## `send_to_loop_closing` 的改變
 
@@ -369,8 +412,9 @@ graphs/
 |---|---|---|
 | `wake` 下 job 的結束 | 先用 `wake` | 階段 0 實測 |
 | ~~`loop_closing.keyframe` 的佇列深度~~ | **已定：16**（偵測平均 2.8 ms，最大 19 ms） | |
-| nls 平行化的程度 | 單執行緒 | 階段 3 量 GBA 的耗時 |
-| 寫回時跳過沒變的點的門檻 | 不跳過 | 階段 3 量寫回的耗時 |
+| ~~nls 平行化的程度~~ | **已定：單執行緒**（GBA 0.3 s） | |
+| ~~寫回時跳過沒變的點的門檻~~ | **已定：不跳過**（寫回 10.6 ms） | |
+| inertial GBA 的 gauge | 照原版不固定（map 座標在寫回時整張平移，V1_02 上 28 cm） | 階段 4 之前 |
 | ~~Sim3 或 SE3~~ | **已定：SE3** | |
 | ~~誰寫 atlas~~ | **已定：只有 local mapping（方案 B）** | |
 | ~~被刪掉的候選~~ | **已定：忽略並計數** | |
