@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(orb_slam3_fw LANGUAGES C CXX)
+# A plain `colcon build` sets no CMAKE_BUILD_TYPE, which builds tracking / local mapping at -O0
+# (~100x slower: slam_job ran at ~1 Hz). Default to Release; pass -DCMAKE_BUILD_TYPE=Debug to override.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
