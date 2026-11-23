@@ -9,7 +9,7 @@ inputs:
 outputs:
   mapper:        { type: tracking/MapperStatus }
   ba_problem:    { type: ba/Problem }
-  loop_keyframe: { type: map/KeyFrameRef }
+  loop_keyframe: { type: loop_closing/LoopKeyFrame }
 resources:   # the parent's of the same name
   atlas:        { type: map/Atlas }
   local_mapper: { type: local_mapping/LocalMapper }

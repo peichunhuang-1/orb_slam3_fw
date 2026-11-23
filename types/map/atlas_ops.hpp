@@ -47,6 +47,9 @@ void updateConnections(Atlas& a, KeyFrameId kf);  // from the points' observatio
 std::vector<KeyFrameId> covisiblesByWeight(const KeyFrame& kf, int w);  // weight >= w, best first
 void changeParent(Atlas& a, KeyFrameId kf, KeyFrameId parent);
 void setKeyFrameBad(Atlas& a, KeyFrameId kf);    // KeyFrame::SetBadFlag (not the map's first keyframe)
+void setNotErase(Atlas& a, KeyFrameId kf);       // KeyFrame::SetNotErase
+// KeyFrame::SetErase: not_erase cleared unless it has loop edges; then SetBadFlag if culling asked for it meanwhile
+void setErase(Atlas& a, KeyFrameId kf);
 int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs);  // good points (with >= min_obs if > 0)
 
 // ---- map points

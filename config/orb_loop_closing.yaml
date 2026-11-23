@@ -1,0 +1,3 @@
+# loop_closing block (params/orb_loop_closing_params.hpp)
+active: true   # ORB-SLAM3's loopClosing
+debug: false   # [LC] detection trace on stderr

@@ -87,7 +87,7 @@ Sim3 對齊的尺度是 1.003–1.005。這裡算的是每個影格當下的位�
 | loop closing | 不做；local mapping 每處理完一個 keyframe 送出 `loop_keyframe`（取代 `mpLoopCloser->InsertKeyFrame`） | 接上 `loop_keyframe` 與 `atlas` |
 | 單目的 `ScaleRefinement` | 不做（只用於單目） | |
 
-**KeyFrameDatabase 的加入**：原版由 loop closing 的 place recognition 把 keyframe 加進 BoW 索引（`mpKeyFrameDB->add`），local mapping 不加。沒有 loop closing 時 relocalization 永遠找不到候選。已定照原版（見[待決定](#待決定)）。
+**KeyFrameDatabase 的加入**：原版由 loop closing 的 place recognition 把 keyframe 加進 BoW 索引（`mpKeyFrameDB->add`）。這裡 atlas 只有 local mapping 寫，所以由 `send_to_loop_closing` 在送出時加入（[loop closing 的設計](../../orb_loop_closing/docs/DESIGN.md#send_to_loop_closing-的改變)）。
 
 ## 圖
 
@@ -288,7 +288,7 @@ process_keyframe                       Run() 的一輪                     ◄�
 | `initialize_imu` | stateful action | `prior_g`、`prior_a`、`fiba` 常值；`ba_result` Optional、`vocabulary`、`ba_problem` out、`mapper` out | atlas w、local_mapper w | `InitializeIMU(priorG, priorA, bFIBA)` |
 | `keyframe_culling` | action | | atlas w、local_mapper r | `KeyFrameCulling` |
 | `begin_inertial_ba` | action | `stage` 常值、`inertial`、`tracking` Optional | atlas w、local_mapper r | VIBA 的條件與 `SetIniertialBA1/2` |
-| `send_to_loop_closing` | action | `loop_keyframe` out | atlas r、local_mapper r | `mpLoopCloser->InsertKeyFrame` |
+| `send_to_loop_closing` | action | `loop_keyframe` out | atlas w、local_mapper r | `mpLoopCloser->InsertKeyFrame`；`SetNotErase` 與 `mpKeyFrameDB->add`（原版在 LC 執行緒） |
 | `reset_if_requested` | action | | local_mapper w | `ResetIfRequested` |
 
 兩個 stateful action 以 class 註冊：`LocalBundleAdjustment`（樹上的名稱 `local_bundle_adjustment`）與 `InitializeImu`（`initialize_imu`、`viba1`、`viba2`）。
@@ -412,7 +412,7 @@ reference 刪除之前要以原版產生的標準答案（`reference_orb_source/
 
 | 事項 | 選項 | 建議 |
 |---|---|---|
-| ~~BoW 索引（KeyFrameDatabase）由誰加入~~ | **已定 (a)**：照原版，由 loop closing 加入；local mapping 不加 | loop closing 做好之前 relocalization 沒有候選 |
+| ~~BoW 索引（KeyFrameDatabase）由誰加入~~ | **已定**：local mapping 的 `send_to_loop_closing` 在送給 loop closing 時加入（atlas 只有 local mapping 寫，見 [loop closing 的設計](../../orb_loop_closing/docs/DESIGN.md#send_to_loop_closing-的改變)） | 已做 |
 | ~~`ba_solver` 的解法器~~ | **已定 (a)**：自己寫 LM + Schur，做成通用的 static 函式庫（只依賴 Eigen，不依賴 fw），之後光達 BA 共用 | 函式庫的位置與介面見下 |
 | ~~`Repeat(-1)` 是否在同一個 tick 內迴圈~~ | 已實測：每輪讓出 tick，fw 自行補 tick，佇列照樣處理完 | 不需改設計 |
 | ~~同步部分讓 tracking 等多久~~ | **已定：不拆**。tracking 是 `versioned` 的讀取者，不等寫入鎖；`process_new_keyframe` 的結果在它回傳時就發布 | 只有之後 loop closing 也寫 `atlas` 時，它要等整個 tick；到時再量 |

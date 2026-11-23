@@ -1,10 +1,11 @@
 # What arrived in this tick: tracking's atlas edits (InsertKeyFrame, RequestReset, RequestResetActiveMap), its
-# InterruptBA, and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
+# InterruptBA, loop closing's changes, and the status tracking reads. Only new values are handled (SkipUnlessUpdated): on a ba_result tick
 # the keys keep the last edits and command.
 version: 1
 inputs:
   atlas_edits: { type: tracking/AtlasEdits }
   mapper_cmd: { type: tracking/MapperCommand }
+  loop_result: { type: loop_closing/LoopResult }
   params:     { type: OrbTrackingParams }
 outputs:
   inertial: { type: fw/bool }
@@ -26,4 +27,9 @@ root:
             SkipUnlessUpdated:
               entry: mapper_cmd
               child: { handle_mapper_command: { mapper_cmd: "{mapper_cmd}" } }
+      - ForceSuccess:
+          child:
+            SkipUnlessUpdated:
+              entry: loop_result
+              child: { apply_loop_result: { loop_result: "{loop_result}" } }
       - publish_mapper_status: { mapper: "{mapper}" }

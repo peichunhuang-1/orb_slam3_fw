@@ -299,6 +299,19 @@ void changeParent(Atlas& a, KeyFrameId k, KeyFrameId parent) {
     if (KeyFrame* p = a.editKeyFrame(parent)) p->children.insert(k);
 }
 
+void setNotErase(Atlas& a, KeyFrameId k) {
+    const KeyFrame* old = a.keyframe(k);
+    if (!old || old->not_erase) return;
+    a.editKeyFrame(k)->not_erase = true;
+}
+
+void setErase(Atlas& a, KeyFrameId k) {
+    const KeyFrame* old = a.keyframe(k);
+    if (!old) return;
+    if (old->loop_edges.empty() && old->not_erase) a.editKeyFrame(k)->not_erase = false;
+    if (const KeyFrame* kf = a.keyframe(k); kf->to_be_erased && !kf->bad) setKeyFrameBad(a, k);
+}
+
 void setKeyFrameBad(Atlas& a, KeyFrameId k) {
     KeyFrame* kf = a.editKeyFrame(k);
     if (!kf) return;

@@ -1,0 +1,4 @@
+# frame_gate block (params/frame_gate_params.hpp), for graphs/slam_merge_job.graph.yaml: a 2 s gap in the images
+# (the IMU goes on) after inertial BA2, so tracking starts a second map.
+drop_from: 30.0
+drop_to: 32.0

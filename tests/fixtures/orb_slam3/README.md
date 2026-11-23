@@ -462,3 +462,40 @@ keyframe's previous one is the one before it.
 has no fixed vertex, so its translation and yaw are free. Their results therefore depend on the last bits of the
 inputs: compare them with tolerances, after aligning the keyframe centres
 (`tests/orb_local_mapping/imu_init_test.cpp` explains the numbers).
+
+## loop/
+
+Place recognition (`LoopClosing::NewDetectCommonRegions` and what it calls) with fixed scale, for
+`tests/orb_loop_closing/place_recognition_test.cpp`. Made by `fixture_gen`'s `gen_loop.cpp`, which was added
+when loop closing was ported.
+
+**Scene:** sixteen keyframes. Keyframes 0..7 are pass A, along the analytic trajectory, 0.1 s apart. Keyframes
+8..15 are pass B: nearly the same poses again, with drift. B's poses and points are in a world displaced by D (a
+few degrees and centimetres), so the loop's relative pose is not the one the poses give. Each pass has its own
+map point per observed scene point (90 %; 5 % of them moved 0.3 m off); these are the duplicates a loop finds.
+Descriptors are one vocabulary word per scene point, with a few bits flipped per view; each keyframe also has 30
+untracked distractors. The current keyframe is 15; the BoW database holds keyframes 0..14.
+
+**Inputs:** `kfk_Tcw`, `kfk_kp_left` / `kp_right`, `kfk_desc`, `kfk_bow` (word, weight), `kfk_feat` (node,
+frame index), `kfk_points`; `points` (reference keyframe, x y z, normal, min / max distance), `point_desc`;
+`covisibility` (keyframe, covisible, weight). Ties in weight are ordered by pointer in the original.
+
+**Outputs**
+- `loop_candidates`, `merge_candidates`: `DetectNBestCandidates(current, 3)`.
+- `bow_kf`, `bow_n`, `bow_matches`: `SearchByBoW(current, first candidate)` with `ORBmatcher(0.9, true)`.
+- `ransac_*`: `Sim3Solver(current, bow_kf, bow_matches, fixed scale)` with `SetRansacParameters(0.99, 15, 300)`.
+  `true_T12` is the truth.
+- `nb_points`, `nb_kfs`: the candidate's neighbourhood. `proj_Tcw`, `proj_pinhole*`, `proj_kb8*`: the two
+  `SearchByProjection(KF, Scw, ...)` overloads, (8, 1.5) and (5, 1.0).
+- `opt_*`: `OptimizeSim3(current, bow_kf, proj_pinhole, opt_T12_initial, 10, fixed scale, all points)`.
+  `mnTrackScaleLevel`, which it reads for points not in the candidate's left view and which this constructor
+  leaves uninitialized, is set first to the level predicted from the distance to the candidate.
+- `bow_detect_*`: `DetectCommonRegionsFromBoW(candidates)` once, then `bow_detect_detections` out of
+  `bow_detect_runs` repeated runs. `true_Tcw` is the current keyframe's true pose in pass A's world.
+
+**Cases:** `loop` (one map) and `merge` (pass A in another map).
+
+**Reproducibility:** `Sim3Solver` samples with `rand()`, so its hypothesis, and everything downstream of it, varies
+from run to run (the original's `rand()` versus the port's `std::mt19937`). `OptimizeSim3` differentiates
+numerically through the KB8 projection's float internals, which makes its path chaotic. The test compares these
+with tolerances and detection rates.

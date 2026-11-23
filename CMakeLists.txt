@@ -200,6 +200,27 @@ foreach(t map_point_culling new_map_points fuse keyframe_culling local_ba imu_in
   endif()
 endforeach()
 
+# orb_loop_closing tests (not installed): build/orb_slam3_fw/orb_loop_closing_<name>_test
+#   place_recognition  keyframe_candidates, keyframe_matching, relative_pose_ransac, optimize_relative_pose,
+#                      place_recognition vs tests/fixtures/orb_slam3/loop
+set(orb_loop_closing_place_recognition_test_SOURCES
+    algorithms/orb_loop_closing/keyframe_candidates/keyframe_candidates.cpp
+    algorithms/orb_loop_closing/keyframe_matching/keyframe_matching.cpp
+    algorithms/orb_loop_closing/relative_pose_ransac/relative_pose_ransac.cpp
+    algorithms/orb_loop_closing/optimize_relative_pose/optimize_relative_pose.cpp
+    algorithms/orb_loop_closing/place_recognition/place_recognition.cpp)
+foreach(t place_recognition)
+  add_executable(orb_loop_closing_${t}_test tests/orb_loop_closing/${t}_test.cpp
+                 ${orb_loop_closing_${t}_test_SOURCES} ${ORB_LOCAL_MAPPING_TEST_TYPES})
+  target_include_directories(orb_loop_closing_${t}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(orb_loop_closing_${t}_test PRIVATE
+                             ORB_SLAM3_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orb_slam3")
+  target_link_libraries(orb_loop_closing_${t}_test Eigen3::Eigen opencv_core fw::core)
+  if(BUILD_TESTING)
+    add_test(NAME orb_loop_closing_${t}_test COMMAND orb_loop_closing_${t}_test)
+  endif()
+endforeach()
+
 # orb_extractor: no fused multiply-add, so the Harris responses and BRIEF rotations round exactly as
 # the GPU version's `precise` arithmetic (same keypoints and descriptors).
 set_source_files_properties(algorithms/orb_extractor/orb_cpu.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")

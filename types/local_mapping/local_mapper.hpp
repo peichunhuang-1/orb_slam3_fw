@@ -60,6 +60,9 @@ struct LocalMapper {
     PendingReset reset = PendingReset::none;
     map::MapId reset_map = map::kNone;           // mpMapToReset
     bool stop_requested = false, stopped = false, not_stop = false;  // loop closing (later)
+    // Each reset applied (reset_all, reset_active_map) adds one: loop closing's results of an older one are
+    // dropped (types/loop_closing/loop_keyframe.hpp)
+    std::uint64_t reset_epoch = 0;
 
     // IMU initialization
     float t_init = 0;       // mTinit
@@ -88,6 +91,9 @@ struct LocalMapper {
     std::vector<PointScratch> point_scratch;        // by point id
 
     std::uint64_t processed = 0;  // keyframes processed (statistics)
+    std::uint64_t loop_results = 0, loop_results_dropped = 0;  // loop_result applied / of an older epoch
+    std::uint64_t loop_skipped_bad = 0;  // SetNotErase / SetErase on a keyframe already bad (skipped)
+    std::uint64_t loops_detected = 0, merges_detected = 0;  // loop_result of kind loop / merge
 };
 
 }  // namespace local_mapping

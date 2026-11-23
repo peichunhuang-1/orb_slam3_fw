@@ -6,7 +6,7 @@
 //   - a reset (RequestReset / RequestResetActiveMap): the keyframes queued before it are dropped now (their
 //     atlas is gone), the rest of ResetIfRequested is done after the keyframe being processed, as in Run(), or
 //     now when there is none. The original's tracking waits for that before clearing the atlas; here the order
-//     of the edits does it.
+//     of the edits does it. The reset epoch goes up (loop closing's results from before it are dropped).
 #include "algorithms/orb_local_mapping/shared/mapper_ops.hpp"
 #include "fw/fw.hpp"
 #include "types/local_mapping/local_mapper.hpp"
@@ -34,6 +34,7 @@ fw::bt::Status apply_tracking_edits(const tracking::AtlasEdits& atlas_edits, fw:
                 m.reset_map = e->map;
             }
             m.queue.clear();
+            ++m.reset_epoch;  // loop closing's results from before are dropped
             if (!m.processing) orb_local_mapping::resetIfRequested(m);
         }
     }
