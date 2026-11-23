@@ -17,9 +17,12 @@
 #include "algorithms/orb_loop_closing/optimize_relative_pose/optimize_relative_pose.hpp"
 #include "algorithms/orb_loop_closing/place_recognition/place_recognition.hpp"
 #include "algorithms/orb_loop_closing/relative_pose_ransac/relative_pose_ransac.hpp"
-#include "tests/orb_local_mapping/fixture_keyframes.hpp"
+#include "tests/orb_loop_closing/loop_scene.hpp"
 
 namespace {
+
+using fixture::Scene;
+using fixture::load;
 
 int failures = 0;
 
@@ -28,83 +31,6 @@ void check(bool ok, const std::string& what) {
         ++failures;
         std::printf("FAIL %s\n", what.c_str());
     }
-}
-
-struct Scene {
-    map::Atlas a;
-    std::vector<map::KeyFrameId> kfs;
-    std::vector<map::MapPointId> pts;
-
-    int kfIndex(map::KeyFrameId id) const {
-        if (id == map::kNone) return -1;
-        return int(std::find(kfs.begin(), kfs.end(), id) - kfs.begin());
-    }
-    int ptIndex(map::MapPointId id) const {
-        if (id == map::kNone) return -1;
-        return int(std::find(pts.begin(), pts.end(), id) - pts.begin());
-    }
-    std::vector<map::MapPointId> points(const Eigen::MatrixXd& idx) const {
-        std::vector<map::MapPointId> r;
-        for (int i = 0; i < idx.rows(); ++i) r.push_back(idx(i) < 0 ? map::kNone : pts[std::size_t(idx(i))]);
-        return r;
-    }
-};
-
-void load(Scene& s, const fixture::File& f, const fixture::Rig& rig) {
-    map::Atlas& a = s.a;
-    const int K = int(f.scalar("n_keyframes")), KA = int(f.scalar("pass_a"));
-    const bool merge = f.scalar("merge") != 0;
-    a.currentMap();
-    map::addRig(a, rig.rig);
-    for (int k = 0; k < K; ++k) {
-        if (merge && k == KA) map::createNewMap(a);
-        const std::string p = "kf" + std::to_string(k) + "_";
-        auto d = std::make_shared<map::KeyFrameData>();
-        d->frame_id = k;
-        d->timestamp = f.scalar(p + "timestamp");
-        d->features = fixture::keyframeFeatures(f, p, rig);
-        d->rig = 0;
-        d->Tlr = rig.Tlr;
-        d->Trl = rig.Tlr.inverse();
-        d->baseline = rig.Tlr.translation().norm();
-        d->th_depth = rig.th_depth;
-        const Eigen::MatrixXd& bow = f[p + "bow"];
-        for (int i = 0; i < bow.rows(); ++i) d->bow[map::WordId(bow(i, 0))] = bow(i, 1);
-        const Eigen::MatrixXd& feat = f[p + "feat"];
-        for (int i = 0; i < feat.rows(); ++i) d->feat[map::NodeId(feat(i, 0))].push_back(unsigned(feat(i, 1)));
-        map::KeyFrame kf;
-        kf.data = std::move(d);
-        kf.setPose(fixture::se3f(f[p + "Tcw"]));
-        if (k > 0 && k != KA) kf.prev = s.kfs.back();
-        const map::KeyFrameId id = map::createKeyFrame(a, std::move(kf));
-        if (k > 0 && k != KA) a.editKeyFrame(s.kfs.back())->next = id;
-        map::insertKeyFrame(a, id);
-        s.kfs.push_back(id);
-    }
-
-    const Eigen::MatrixXd& P = f["points"];
-    const Eigen::MatrixXd& D = f["point_desc"];
-    for (int r = 0; r < P.rows(); ++r)
-        s.pts.push_back(map::createMapPoint(a, P.block<1, 3>(r, 1).transpose().cast<float>(), s.kfs[std::size_t(P(r, 0))]));
-    for (int k = 0; k < K; ++k) {
-        const Eigen::MatrixXd& kp = f["kf" + std::to_string(k) + "_points"];
-        for (int i = 0; i < kp.rows(); ++i) {
-            if (kp(i) < 0) continue;
-            const map::MapPointId p = s.pts[std::size_t(kp(i))];
-            map::addObservation(a, p, s.kfs[std::size_t(k)], i);
-            a.editKeyFrame(s.kfs[std::size_t(k)])->points[std::size_t(i)] = p;
-        }
-    }
-    for (int r = 0; r < P.rows(); ++r) {
-        map::insertMapPoint(a, s.pts[std::size_t(r)]);
-        map::MapPoint* p = a.editPoint(s.pts[std::size_t(r)]);
-        p->normal = P.block<1, 3>(r, 4).transpose().cast<float>();
-        p->min_distance = float(P(r, 7));
-        p->max_distance = float(P(r, 8));
-        for (int b = 0; b < 32; ++b) p->descriptor[std::size_t(b)] = std::uint8_t(D(r, b));
-    }
-    for (map::KeyFrameId id : s.kfs) map::updateConnections(a, id);
-    for (int k = 0; k < K - 1; ++k) map::addToBowIndex(a, s.kfs[std::size_t(k)]);
 }
 
 int countDiff(const Scene& s, const std::vector<map::MapPointId>& got, const Eigen::MatrixXd& want) {

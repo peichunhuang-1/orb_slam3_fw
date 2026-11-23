@@ -495,6 +495,28 @@ frame index), `kfk_points`; `points` (reference keyframe, x y z, normal, min / m
 
 **Cases:** `loop` (one map) and `merge` (pass A in another map).
 
+**Correction cases** (`correct`, `correct_4dof`; for `tests/orb_loop_closing/correct_loop_test.cpp`):
+`LoopClosing::CorrectLoop` on the same kind of scene, in one map, with two changes so the essential graph has work
+left after the correction:
+- The drift grows along pass B: keyframe k of B is displaced by D^f, with f from 1/8 to 1.
+- Each pass B point is seen only by the B keyframes within two of a home keyframe, and is displaced as that
+  keyframe is. The current keyframe's covisibles are then only the last few, and the earlier B keyframes are left
+  to the essential graph.
+
+The loop is the one `DetectCommonRegionsFromBoW` finds on `loop_candidates`, retried until it detects. `correct`
+is a visual map (`OptimizeEssentialGraph`, 6DoF). `correct_4dof` is inertial with every keyframe `bImu`
+(`OptimizeEssentialGraph4DoF`). Both have the IMU initialized and a second, empty map in the atlas, so
+`CorrectLoop` starts no global BA. Velocities are random. The local mapper is a `LocalMapping` that is always
+stopped.
+
+- Extra inputs: `inertial`, `parents` (the spanning tree), `velocity`, `Tcb`; the loop's `loop_matched`,
+  `loop_Tcw` (`mg2oLoopScw`), `loop_matched_points` (per current frame index), `loop_points`.
+- Outputs: `after_kK_Tcw`, `after_kK_points`, `after_kK_loop_edges` per keyframe; `after_velocity`;
+  `after_points` (x y z, bad).
+
+The port matches to float rounding: poses about 1e-5°, points about 1e-6 m, while the graph moves keyframes by
+15–18 cm. The fusion (which keyframe feature holds which point, which points went bad) matches exactly.
+
 **Reproducibility:** `Sim3Solver` samples with `rand()`, so its hypothesis, and everything downstream of it, varies
 from run to run (the original's `rand()` versus the port's `std::mt19937`). `OptimizeSim3` differentiates
 numerically through the KB8 projection's float internals, which makes its path chaotic. The test compares these

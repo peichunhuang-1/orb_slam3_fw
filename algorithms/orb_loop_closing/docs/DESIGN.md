@@ -2,13 +2,13 @@
 
 這份文件定架構（圖上怎麼連、誰寫 `atlas`、local mapping 的樹怎麼加、資料放在哪裡），並分階段記錄實作與驗證。沿用 [local mapping 的設計](../../orb_local_mapping/docs/DESIGN.md)與 [tracking 的設計](../../orb_tracking/docs/DESIGN.md#原則)的原則（以 id 引用、型別只放資料、程式碼依使用者放置、長時間運算在鎖外），不再重複。
 
-**目前的狀態**：階段 1 完成（只偵測，不修正）。
+**目前的狀態**：階段 2 完成（loop 會修正；global BA 與地圖合併還沒做）。
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
 | 0 | 骨架：`loop_closing` block、`loop_result`（`wake`）、`send_to_loop_closing` 把 keyframe 加進 BoW 索引；`wake` 與 job 結束的試驗；`frame_gate` 只丟影像的試驗 | 完成（見下） |
 | 1 | place recognition：候選、keyframe 間的匹配、`RelativePoseRansac`、`optimizeRelativePose`、三次確認（loop 與 merge 都偵測，只偵測不修正） | 完成（見下） |
-| 2 | `CorrectLoop`：Stop／Release、`SearchAndFuse`、essential graph（6DoF、4DoF） | 未開始 |
+| 2 | `CorrectLoop`：Stop／Release、`SearchAndFuse`、essential graph（6DoF、4DoF） | 完成（見下） |
 | 3 | global BA：`gba_solver`、分段迭代、寫回時沿 spanning tree 傳遞 | 未開始 |
 | 4 | 地圖合併：`MergeLocal`（stereo）、`MergeLocal2`（stereo-inertial）、`MergeInertialBA`；`slam_merge_job` | 未開始 |
 
@@ -37,6 +37,34 @@
 - V1_02 實跑（Pi 5）：每個 keyframe 偵測平均 2.8 ms，p95 8 ms，最大 19 ms，佇列深度 16 足夠。沒有偵測到 loop。原版在 V1_02 stereo-inertial 跑 5 次是 0–1 次 loop（`reference_orb_source/vslam/tools/compare_runs.py` 的記錄）。大部分候選停在共視檢查或 RANSAC（BoW 配對 20–30 個，多半是錯的）。
 - `slam_merge_job` 實跑：第二張地圖做完 BA2 之後，回到舊區域的 keyframe 都找得到舊地圖的 merge 候選（254 個），BoW 配對約 60–130 個。但都沒有通過：最接近的幾個停在「最佳化後的投影」（47–75，門檻 80），所以沒有偵測到 merge。原版在這條資料上會不會 merge 還沒比過（要讓 reference 吃同一份特徵）。階段 4 之前要決定：比對原版，或把缺口移到回訪舊區域比較多的位置。
 - 因為還不修正，偵測到的 loop 之後可能再被偵測到；原版修正後地圖已經對齊，不會再偵測。這要到階段 2 才會一致。
+
+**階段 2**：
+
+- 程式：
+  - `correct_loop/correction.{hpp,cpp}`：`beginCorrectLoop` 是 `CorrectLoop` 到 essential graph 之前的部分，`endCorrectLoop` 是最佳化之後的寫回；`fuseWithPose` 是 `ORBmatcher::Fuse(pKF, Scw, …)`。
+  - `correct_loop/correct_loop.cpp`：樹的節點，中間等 `ba_solver` 時是 RUNNING。
+  - `ba_solver/pose_graph.{hpp,cpp}`：`pose_graph`（6DoF）與 `pose_graph_4dof` 兩種問題。
+  - local mapping 的新葉節點：`stop_requested`、`empty_queue`、`release_stop`；loop closing 的 `is_loop_pending`；子樹 `graphs/trees/local_mapping/correct_map.tree.yaml`（見「local mapping 的樹」）。
+- 照原版保留的怪處：
+  - 6DoF：原版的頂點有 7 維，尺度的更新歸零。g2o 的數值微分也經過同一個歸零的更新，所以尺度那一欄的 Jacobian 是 0，問題其實就是 6 維，這裡直接用 6 維，結果相同。
+  - 4DoF：頂點的狀態照 `ImuCamPose::UpdateW` 保留：累積的旋轉 `DR` 每 5 次更新去掉 roll、pitch 並正交化（數值微分的擾動也算一次）；第一次更新之前用 keyframe 自己的相機位姿（與 IMU 位姿分別從 float 算來）。
+  - 4DoF 的資訊矩陣：原版把 (0, 0) 設了兩次，(2, 2) 留在 1。
+  - 4DoF 沒有 spanning tree 的邊（原版的 `pParentKF` 是 NULL），covisibility 的邊也就不排除 parent。
+  - 4DoF 的點一律用參考 keyframe 修正（6DoF 用修正它的那個 keyframe）。
+  - `EmptyQueue` 處理的 keyframe 不送給 loop closing，所以不進 BoW 索引。
+- 和原版不同的地方：
+  - 原版以指標為鍵的 `KeyFrameAndPose`，這裡依 id 走訪：一個點被好幾個修正的 keyframe 看到時，由 id 最小的那個修正。
+  - Loop fusion 跳過已經 bad 的配對點。原版 detection 與修正在同一個執行緒，中間沒有空檔；這裡中間 local mapping 可能已經刪了那個點，原版會把 bad 的點加進 keyframe。
+  - `Release` 不刪除停止期間排進佇列的 keyframe（原版會刪）。tracking 看到停止就不建 keyframe，只有晚一個 tick 的狀態放進來的少數幾個，這裡照常處理。
+  - 區域重設的 `SetErase`（原版在 `CorrectLoop` 之後，那時 loop edge 已經加上）等修正完才套用（`LoopResult::erase_after_correction`）。若在修正之前套用，可能把 matched keyframe 刪掉。
+  - 不修正的 loop：已經有一個在等修正（`loops_busy`）、偵測之後地圖有過 big change（`loops_stale`：偵測看到的位姿已經過時；原版偵測與修正在同一個執行緒，不會發生）、目前或 matched keyframe 已經 bad（`loops_gone`）。這三種都只套用旗標。
+  - 修正完原版會啟動 global BA（IMU 未初始化，或地圖少於 200 個 keyframe 且只有一張地圖）。這是階段 3，目前只計數（`gba_wanted`）。
+- fixture（`loop/correct.txt`、`correct_4dof.txt`，原版的 `CorrectLoop`；場景見 fixtures 的 README）：
+  - keyframe 的點（loop fusion 與 `SearchAndFuse` 的結果）與點的 bad 旗標完全相同。
+  - 位姿差 1e-5°、3e-7 m，速度差 4e-7，點差 4e-6 m；essential graph 移動 keyframe 達 15–18 cm。
+- V1_02 實跑：
+  - 照常沒有偵測到 loop，ATE 與階段 1 完全相同（lockstep 是確定的）：odom 0.0935 m，`--frame map --from 20` 0.023 m。
+  - 暫時放寬偵測（投影門檻 80 → 40、確認 3 次 → 1 次，跑完已改回）：kf 311 與 134 的 loop 走完整條修正（4DoF，67 個 keyframe、154 條邊，5 次迭代，6.1 ms），job 照常自己結束，ATE 0.0932 m，與不修正時幾乎相同（真的回訪，修正很小）。另一個 loop 被 inertial 的 roll／pitch 檢查擋下（BAD LOOP）。
 
 **驗收**：V1_02 上整條軌跡的 ATE 與原版相近、loop 的次數相近。中間狀態不要求一致（原版的三條執行緒時序本身不固定）。函式層以 `fixture_gen` 的答案比對，是為了除錯，不是驗收條件。
 
@@ -144,6 +172,8 @@ seq, epoch
 keyframe                         這次處理的 keyframe
 erase_flags                      SetNotErase／SetErase 依原版呼叫的順序排成一列（同一個 keyframe 可能兩種都有，
                                  分成兩個清單會弄錯先後）
+erase_after_correction           從這個位置起的旗標在原版是 CorrectLoop 之後才做，修正完才套用
+big_change                       偵測時目前地圖的 mnBigChangeIdx；修正時不同就不修正（位姿已過時）
 kind: none | loop | merge
 loop:  matched_kf、Tcw（mg2oLoopScw，目前 keyframe 修正後的位姿）、
        matched_points（每個特徵：mvpLoopMatchedMPs）、loop_points（mvpLoopMapPoints）
@@ -164,7 +194,7 @@ merge: matched_kf、Tcw（mg2oMergeScw）、Tmw（mg2oMergeSmw）、
 | `merge_inertial` | `MergeInertialBA` | `MergeLocal2` |
 | `inertial_bias` | `InertialOptimization(pMap, bg, ba)`（只估 bias） | `MergeLocal2`，地圖還沒有 BA2 時 |
 
-位姿圖的問題另需 keyframe 對之間的相對位姿（`Sji`）與邊的種類（spanning tree、loop、covisibility ≥ 100、新的 loop 連線、inertial 的 prev），放在 `ba::Problem` 新的 `edges` 欄位。
+位姿圖的問題另需 keyframe 對之間的相對位姿（`Sji`）與邊的種類（spanning tree、loop、covisibility ≥ 100、新的 loop 連線、inertial 的 prev）。已做（階段 2）：`ba::Problem::pose_graph`（每個頂點的初值、是否在 `CorrectedSim3` 裡）與 `edges`（兩端與量測），結果在 `ba::Result::poses`。邊由 loop closing 算好，`ba_solver` 只解。
 
 ## global BA：分段迭代
 
@@ -197,31 +227,34 @@ local_mapping                                   gba_solver（問題留在成員�
 
 ## local mapping 的樹
 
+階段 2 的樹（`+` 是之後的階段要加的）：
+
 ```
 local_mapping
 └ ReactiveSequence
   ├ SubTree receive_inputs
   │   + ForceSuccess( SkipUnlessUpdated(loop_result) → apply_loop_result )
-  │   + ForceSuccess( SkipUnlessUpdated(gba_result)  → step_global_ba )
+  │   + ForceSuccess( SkipUnlessUpdated(gba_result)  → step_global_ba )            （階段 3）
   ├ ForceSuccess( Repeat(-1)( Sequence[ has_new_keyframe, SubTree process_keyframe ] ) )
   │                                   has_new_keyframe 多一個條件：!stop_requested
   ├ ForceSuccess
-  │ └ Sequence
-  │   ├ stop_requested                有 loop／merge 要修正，或 GBA 的結果要寫回
-  │   ├ empty_queue                   EmptyQueue：佇列中的 keyframe 只做 ProcessNewKeyFrame（GBA 寫回時不做，與原版相同）
-  │   └ Fallback
-  │     ├ Sequence[ is_pending{loop},  CorrectLoop ]          stateful：同步部分 → pose_graph(_4dof) → 寫回 → 啟動 GBA
-  │     ├ Sequence[ is_pending{merge}, MergeMaps ]            stateful：MergeLocal 或 MergeLocal2 的各段
-  │     └ Sequence[ is_pending{gba},   apply_global_ba ]
-  │   （結束時 Release：stop_requested = false、stopped = false）
-  └ mapper_idle                       ResetIfRequested、SetAcceptKeyFrames(true)；stopped 時送出 isStopped
+  │ └ SubTree correct_map
+  │   └ Sequence
+  │     ├ stop_requested              有 loop 要修正（之後：merge、GBA 的結果要寫回）
+  │     ├ empty_queue                 EmptyQueue：佇列中的 keyframe 只做 ProcessNewKeyFrame；然後 Stop()：stopped
+  │     ├ ForceSuccess( Sequence[ is_loop_pending, CorrectLoop ] )   stateful：beginCorrectLoop → pose_graph(_4dof) → endCorrectLoop
+  │     │ + Sequence[ is_pending{merge}, MergeMaps ]                 （階段 4）
+  │     │ + Sequence[ is_pending{gba},   apply_global_ba ]           （階段 3）
+  │     └ release_stop                Release：stop_requested = false、stopped = false
+  └ mapper_idle                       ResetIfRequested、SetAcceptKeyFrames(true)
 ```
 
-- **`apply_loop_result`**（同步，`receive_inputs` 裡）：`epoch` 對不上就丟；`erase_flags` 照順序套用，keyframe 已經是 bad 的跳過；`kind` 是 loop 或 merge 時，matched keyframe 還是 good 才記成 pending 並設 `stop_requested`、`abort_ba`（`RequestStop`），否則整筆丟掉並計數。
-- **`step_global_ba`**（同步）：partial 時送 `gba_continue`；final 時存結果、設 pending gba 與 `stop_requested`。若期間來了新的 loop，`CorrectLoop` 已換掉 seq，舊的結果在這裡被丟掉。
-- **RUNNING 只出現在 `CorrectLoop`、`MergeMaps`**（等 `ba_solver`）。這期間 `has_new_keyframe` 為 false（`stop_requested`），tracking 看到 `stopped`／`stop_requested` 就不建 keyframe（`need_new_keyframe` 已經這樣判斷），與原版 LM 停著時相同。
+- **`apply_loop_result`**（同步，`receive_inputs` 裡）：`epoch` 對不上就丟。`erase_flags` 照順序套用，keyframe 已經是 bad 的跳過。`kind` 是 loop 時，若沒有別的 loop 在等、地圖的 big change 與偵測時相同、目前與 matched keyframe 都還是 good，就記成 pending（`local_mapper.loop`），並設 `stop_requested`、`abort_ba`（`RequestStop`），`erase_after_correction` 之後的旗標留到修正完。否則計數，旗標全部立刻套用。
+- **`CorrectLoop`**（`correct_loop/`）：start 做同步部分、送出位姿圖，RUNNING；收到同一個 seq 的結果就寫回，再套用留下的旗標。期間有 reset（`reset_epoch` 改變）就丟掉。
+- **`step_global_ba`**（階段 3，同步）：partial 時送 `gba_continue`；final 時存結果、設 pending gba 與 `stop_requested`。若期間來了新的 loop，`CorrectLoop` 已換掉 seq，舊的結果在這裡被丟掉。
+- **RUNNING 只出現在 `CorrectLoop`（之後還有 `MergeMaps`）**，都是在等 `ba_solver`。這期間 `has_new_keyframe` 為 false（`stop_requested`），tracking 看到 `stopped`／`stop_requested` 就不建 keyframe（`need_new_keyframe` 已經這樣判斷），與原版 LM 停著時相同。process_keyframe 還在 RUNNING（等 local BA）時，ReactiveSequence 不會走到 `correct_map`，所以已送出的 local BA 先寫回才修正。
 - **GBA 本身不是 RUNNING**：它在 `gba_solver` 上跑好幾秒，期間 local mapping 照常處理 keyframe（原版也是），只有寫回時停一下。
-- 這一段放在新的子樹檔 `graphs/trees/local_mapping/correct_map.tree.yaml`。葉節點的程式碼放在 `algorithms/orb_loop_closing/`（邏輯是 loop closing 的，只是由 local mapping 的樹執行）。
+- 葉節點的位置：Stop／EmptyQueue／Release 是 `LocalMapping` 的方法，放在 `algorithms/orb_local_mapping/`（`stop_requested`、`empty_queue`、`release_stop`）；`is_loop_pending`、`CorrectLoop` 的邏輯是 loop closing 的，放在 `algorithms/orb_loop_closing/`。
 
 ## `send_to_loop_closing` 的改變
 
@@ -256,7 +289,7 @@ local_mapping
 | `addLoopEdge`、`addMergeEdge` | `KeyFrame::AddLoopEdge`、`AddMergeEdge`（同時 `SetNotErase`） |
 | `changeMap`、`setMapBad`、`removeBadMaps` | `Atlas::ChangeMap`、`SetMapBad`、`RemoveBadMaps` |
 | `moveKeyFrameToMap`、`movePointToMap` | `KeyFrame::UpdateMap`、`MapPoint::UpdateMap`（含 `Map::AddKeyFrame`／`EraseKeyFrame` 與點數） |
-| `fuseWithPose` | `ORBmatcher::Fuse(pKF, Scw, vpPoints, th, vpReplacePoint)` 的 SE3 版 |
+| ~~`fuseWithPose`~~ | 放在 `correct_loop/correction`（是 matcher 的邏輯，不是 atlas 的操作） |
 
 `applyScaledRotation`、`updateConnections`、`changeParent`、`replace` 已有。
 

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <list>
+#include <unordered_map>
 #include <vector>
 
 #include <Eigen/Core>
@@ -15,6 +16,7 @@
 #include "types/ba/problem.hpp"
 #include "types/geometry/se3.hpp"
 #include "types/imu/preintegrated.hpp"
+#include "types/loop_closing/loop_result.hpp"
 #include "types/map/ids.hpp"
 
 namespace local_mapping {
@@ -37,7 +39,7 @@ struct PointScratch {
 };
 
 // The optimization ba_solver is working on, and what writing it back needs
-enum class Waiting { none, local_ba, imu_init_inertial, imu_init_full };
+enum class Waiting { none, local_ba, imu_init_inertial, imu_init_full, pose_graph };
 struct PendingOptimization {
     Waiting waiting = Waiting::none;
     std::uint64_t seq = 0;  // the problem's; a result with another one is dropped
@@ -47,6 +49,25 @@ struct PendingOptimization {
     std::vector<map::KeyFrameId> imu_keyframes;
     double first_ts = 0;
     map::KeyFrameId gba_id = map::kNone;
+};
+
+// A loop loop closing detected, to be corrected (LoopClosing::CorrectLoop) once local mapping has stopped, and
+// what writing the essential graph back needs (algorithms/orb_loop_closing/correct_loop/correction.hpp)
+struct PendingLoop {
+    bool pending = false;
+    std::uint64_t epoch = 0;  // reset_epoch when it was taken: a reset since drops it (the ids name others)
+    map::KeyFrameId keyframe = map::kNone, matched_kf = map::kNone;  // mpCurrentKF, mpLoopMatchedKF
+    geometry::SE3d Tcw;                                              // mg2oLoopScw
+    std::vector<map::MapPointId> matched_points, region_points;      // mvpLoopMatchedMPs, mvpLoopMapPoints
+    std::vector<loop_closing::EraseFlag> erase_after;                // applied once corrected
+    // While the essential graph is computed: its map, kind, vertices (ids) with their poses before the
+    // optimization (vScw), and the points corrected with the loop (mnCorrectedByKF == the current keyframe)
+    // with the keyframe that corrected them (mnCorrectedReference)
+    map::MapId map = map::kNone;
+    bool four_dof = false;
+    std::vector<map::KeyFrameId> vertices;
+    std::vector<geometry::SE3d> vertex_poses;
+    std::unordered_map<map::MapPointId, map::KeyFrameId> corrected_reference;
 };
 
 struct LocalMapper {
@@ -94,6 +115,11 @@ struct LocalMapper {
     std::uint64_t loop_results = 0, loop_results_dropped = 0;  // loop_result applied / of an older epoch
     std::uint64_t loop_skipped_bad = 0;  // SetNotErase / SetErase on a keyframe already bad (skipped)
     std::uint64_t loops_detected = 0, merges_detected = 0;  // loop_result of kind loop / merge
+    // Loops not corrected: another one pending, the map changed since the detection (big change), the current or
+    // matched keyframe gone bad meanwhile; loops corrected; global BAs the original would start (phase 3)
+    std::uint64_t loops_busy = 0, loops_stale = 0, loops_gone = 0, loops_corrected = 0, gba_wanted = 0;
+
+    PendingLoop loop;
 };
 
 }  // namespace local_mapping

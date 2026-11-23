@@ -1,0 +1,24 @@
+# Loop closing's correction of the map, run by local mapping once a stop is requested and the keyframe in hand is
+# done (algorithms/orb_loop_closing/docs/DESIGN.md, "local mapping 的樹"): EmptyQueue and Stop, CorrectLoop
+# (RUNNING while ba_solver computes the essential graph), Release.
+version: 1
+inputs:
+  ba_result:  { type: ba/Result }
+  vocabulary: { type: map/Vocabulary }
+outputs:
+  ba_problem: { type: ba/Problem }
+resources:   # the parent's of the same name
+  atlas:        { type: map/Atlas }
+  local_mapper: { type: local_mapping/LocalMapper }
+root:
+  Sequence:
+    children:
+      - stop_requested: {}
+      - empty_queue: { vocabulary: "{vocabulary}" }
+      - ForceSuccess:
+          child:
+            Sequence:
+              children:
+                - is_loop_pending: {}
+                - CorrectLoop: { name: correct_loop, ba_result: "{ba_result}", ba_problem: "{ba_problem}" }
+      - release_stop: {}

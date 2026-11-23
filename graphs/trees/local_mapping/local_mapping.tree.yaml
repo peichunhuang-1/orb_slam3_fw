@@ -38,4 +38,9 @@ root:
                     - SubTree: { tree: trees/local_mapping/process_keyframe.tree.yaml, name: process_keyframe, vocabulary: "{vocabulary}",
                                  inertial: "{inertial}", tracking: "{tracking}", ba_result: "{ba_result}",
                                  mapper: "{mapper}", ba_problem: "{ba_problem}", loop_keyframe: "{loop_keyframe}" }
+      # Loop closing's correction once the keyframe in hand is done (RequestStop .. Release)
+      - ForceSuccess:
+          child:
+            SubTree: { tree: trees/local_mapping/correct_map.tree.yaml, name: correct_map, vocabulary: "{vocabulary}",
+                       ba_result: "{ba_result}", ba_problem: "{ba_problem}" }
       - mapper_idle: { mapper: "{mapper}" }

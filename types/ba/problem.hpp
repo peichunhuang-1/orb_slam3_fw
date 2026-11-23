@@ -4,7 +4,8 @@
 // writes the result back by id (algorithms/orb_local_mapping/docs/DESIGN.md, "鎖外計算"). A problem holds no
 // pointer into the atlas: the preintegrations and cameras are copies.
 //
-// The fields are what the four ORB-SLAM3 optimizations need.
+// The fields are what the ORB-SLAM3 optimizations need (four of local mapping's, the two essential graphs of
+// loop closing).
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -24,6 +25,21 @@ enum class Kind {
     local_inertial,  // Optimizer::LocalInertialBA
     inertial_init,   // Optimizer::InertialOptimization (Rwg, scale, biases, velocities; poses fixed)
     full_inertial,   // Optimizer::FullInertialBA
+    pose_graph,      // Optimizer::OptimizeEssentialGraph(pMap, pLoopKF, pCurKF, ..., bFixScale = true): 6DoF
+    pose_graph_4dof, // Optimizer::OptimizeEssentialGraph4DoF: x, y, z, yaw of each body
+};
+
+// Pose graph kinds: a keyframe's vertex (keyframes[i] keeps the id, fixed, Tcw and T_cb)
+struct PoseGraphVertex {
+    geometry::SE3d Tcw;      // vScw: the corrected pose (CorrectedSim3) or the keyframe's own
+    bool corrected = false;  // in CorrectedSim3 (4dof: the vertex is made from Tcw, else from the keyframe's pose)
+};
+
+// A pose graph edge between vertices i and j (indices into keyframes), its measurement from the poses before
+// the correction. pose_graph: Sji = Sjw · Swi, error log(Sji · Siw · Sjw⁻¹); pose_graph_4dof: Tij = Tiw · Twj.
+struct PoseGraphEdge {
+    int i = -1, j = -1;
+    geometry::SE3d T;
 };
 
 struct KeyFrameState {
@@ -67,6 +83,9 @@ struct Problem {
     std::vector<KeyFrameState> keyframes;
     std::vector<PointState> points;
     std::vector<Observation> observations;
+    // Pose graph kinds (keyframes, pose_graph, edges; no points)
+    std::vector<PoseGraphVertex> pose_graph;
+    std::vector<PoseGraphEdge> edges;
     // Options of the kind
     int iterations = 10;
     double initial_lambda = 0;  // > 0: g2o's setUserLambdaInit; 0: 1e-5 · the largest diagonal
@@ -86,6 +105,7 @@ struct Result {
     bool ok = false;  // false: nothing to write back (local_inertial: "FAIL LOCAL-INERTIAL BA")
     std::vector<KeyFrameState> keyframes;  // id, Tcw, velocity and bias when inertial (no preintegration)
     std::vector<PointState> points;        // id, pos
+    std::vector<geometry::SE3d> poses;     // pose graph kinds: each problem keyframe's optimized Tcw (in order)
     struct Erase {
         map::KeyFrameId keyframe = map::kNone;
         map::MapPointId point = map::kNone;

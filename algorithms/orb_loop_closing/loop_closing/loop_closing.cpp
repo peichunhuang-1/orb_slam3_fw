@@ -11,7 +11,9 @@
 //          after BA2, yaw only.
 //   then   the region's state reset (SetErase of its last current and matched keyframes), a merge resets the
 //          loop region too.
-// Phase 1: the result carries the detection; local mapping only counts it (no correction yet).
+// A loop to correct: the flags of the region's reset are marked as coming after the correction
+// (erase_after_correction), and big_change records the map's mnBigChangeIdx this detection saw. Local mapping
+// corrects (correct_loop/); merges are only counted (phase 4).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -137,6 +139,8 @@ private:
             }
             if (good) {
                 r.kind = LoopResult::Kind::loop;
+                r.erase_after_correction = r.erase_flags.size();
+                r.big_change = cur_map.big_change_index;
                 r.matched_kf = matched.id;
                 r.Tcw = Tcw;
                 r.matched_points = loop.matched_points;

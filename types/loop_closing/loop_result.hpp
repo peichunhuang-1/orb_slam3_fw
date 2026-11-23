@@ -5,7 +5,9 @@
 // went bad meanwhile are skipped.
 //
 // Poses are SE3 (stereo / stereo-inertial: the original's Sim3 with scale fixed to 1).
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "fw/fw.hpp"
@@ -28,6 +30,13 @@ struct LoopResult {
     map::KeyFrameId keyframe = map::kNone;  // mpCurrentKF
     // SetNotErase / SetErase, in the order the original calls them (the same keyframe can get both)
     std::vector<EraseFlag> erase_flags;
+    // The flags from this index on come after the correction in the original (Run's reset of the region after
+    // CorrectLoop, which has added the loop edges by then): local mapping applies them once it has corrected,
+    // or at once when it does not correct
+    std::size_t erase_after_correction = std::numeric_limits<std::size_t>::max();
+    // The current keyframe's map's big change index (mnBigChangeIdx) the detection saw: a correction since then
+    // moved the map under it, so its poses are stale and local mapping does not correct with them
+    int big_change = 0;
 
     // What was detected and is to be corrected (none: nothing, or a detection the original does not correct:
     // a bad loop, a merge before the IMU is initialized)

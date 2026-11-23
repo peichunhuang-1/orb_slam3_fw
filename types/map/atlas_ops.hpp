@@ -50,6 +50,7 @@ void setKeyFrameBad(Atlas& a, KeyFrameId kf);    // KeyFrame::SetBadFlag (not th
 void setNotErase(Atlas& a, KeyFrameId kf);       // KeyFrame::SetNotErase
 // KeyFrame::SetErase: not_erase cleared unless it has loop edges; then SetBadFlag if culling asked for it meanwhile
 void setErase(Atlas& a, KeyFrameId kf);
+void addLoopEdge(Atlas& a, KeyFrameId kf, KeyFrameId other);  // KeyFrame::AddLoopEdge (also SetNotErase)
 int trackedMapPoints(const Atlas& a, const KeyFrame& kf, int min_obs);  // good points (with >= min_obs if > 0)
 
 // ---- map points

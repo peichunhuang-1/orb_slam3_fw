@@ -299,6 +299,13 @@ void changeParent(Atlas& a, KeyFrameId k, KeyFrameId parent) {
     if (KeyFrame* p = a.editKeyFrame(parent)) p->children.insert(k);
 }
 
+void addLoopEdge(Atlas& a, KeyFrameId kf, KeyFrameId other) {
+    KeyFrame* k = a.editKeyFrame(kf);
+    if (!k) return;
+    k->not_erase = true;
+    k->loop_edges.insert(other);
+}
+
 void setNotErase(Atlas& a, KeyFrameId k) {
     const KeyFrame* old = a.keyframe(k);
     if (!old || old->not_erase) return;

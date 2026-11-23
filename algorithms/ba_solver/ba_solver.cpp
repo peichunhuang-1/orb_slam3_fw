@@ -4,12 +4,14 @@
 //   local_inertial Optimizer::LocalInertialBA
 //   inertial_init  Optimizer::InertialOptimization
 //   full_inertial  Optimizer::FullInertialBA
-// local_ba.hpp, local_inertial.hpp, inertial.hpp.
+//   pose_graph, pose_graph_4dof  Optimizer::OptimizeEssentialGraph (6DoF), OptimizeEssentialGraph4DoF
+// local_ba.hpp, local_inertial.hpp, inertial.hpp, pose_graph.hpp.
 #include <chrono>
 
 #include "algorithms/ba_solver/inertial.hpp"
 #include "algorithms/ba_solver/local_ba.hpp"
 #include "algorithms/ba_solver/local_inertial.hpp"
+#include "algorithms/ba_solver/pose_graph.hpp"
 #include "fw/fw.hpp"
 #include "types/ba/problem.hpp"
 
@@ -26,6 +28,10 @@ public:
             r = ba_solver::solveLocalInertial(p);
         } else if (p.kind == ba::Kind::inertial_init) {
             r = ba_solver::solveInertialInit(p);
+        } else if (p.kind == ba::Kind::pose_graph) {
+            r = ba_solver::solvePoseGraph(p);
+        } else if (p.kind == ba::Kind::pose_graph_4dof) {
+            r = ba_solver::solvePoseGraph4DoF(p);
         } else {
             r = ba_solver::solveFullInertial(p);
         }
