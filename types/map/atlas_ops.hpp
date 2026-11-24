@@ -19,6 +19,8 @@ namespace map {
 // CreateNewMap: the current map is stored, a new one is current. Its id: the next one, or id (from tracking)
 MapId createNewMap(Atlas& a, MapId id = kNone);
 void clearMap(Atlas& a, MapId m);                 // Map::clear: its keyframes leave it (map = kNone), sets emptied
+// Atlas::SetMapBad: the map leaves maps (CountMaps, findMap) for bad_maps, flagged bad (not the current one)
+void setMapBad(Atlas& a, MapId m);
 std::vector<MapPointId> mapPoints(const Atlas& a, MapId m);  // GetAllMapPoints, by id (goes over every point)
 // Map::ApplyScaledRotation(T, s, bScaledVel): each keyframe's Twc with its translation scaled, then T·Twc; its
 // velocity rotated by T (and scaled); each point s·R·p + t, UpdateNormalAndDepth; the map's change index

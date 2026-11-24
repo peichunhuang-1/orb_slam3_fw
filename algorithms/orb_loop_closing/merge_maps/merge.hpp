@@ -12,10 +12,11 @@
 //   id: the original's GetAllKeyFrames goes by address).
 // applyMergeBias  its write-back (velocities; the bias, the preintegration re-integrated when the gyro bias moved
 //   by more than 0.01), UpdateFrameIMU(1, the bias, the last keyframe), BA2, BA1, SetImuInitialized.
-// joinMaps  every keyframe and point of the merge map moves to the current map (which stays current; the merge
-//   map stays in the atlas, empty, as the original never sets it bad); the merge map's origin loses its first
-//   connection; the spanning tree from the matched keyframe up to its root reversed, the matched keyframe a
-//   child of the current one. mvpMergeConnectedKFs (m.merge_connected_kfs, never cleared) gets the matched
+// joinMaps  every keyframe and point of the merge map moves to the current map (which stays current); the merge
+//   map's origin loses its first connection; the merge map set bad (SetMapBad: CountMaps drops; the original's
+//   MergeLocal2 leaves it in the atlas, empty). The spanning tree from the matched keyframe up to its root
+//   reversed, the matched keyframe a child of the current one. mvpMergeConnectedKFs (m.merge_connected_kfs,
+//   cleared first: the original never clears it, appending to the first merge's) gets the matched
 //   keyframe and its covisibles, the first 6 kept; the current keyframe's connections updated, it and its
 //   covisibles (the first 6); SearchAndFuse of the points of the former (stopping once over 1000, after a whole
 //   keyframe) into the latter by their poses (fuseWithPose, th 4), each found point replaced; the connections of
@@ -26,9 +27,12 @@
 //       keyframe and 2 previous ones, the previous one of the oldest fixed (with none, the oldest is fixed
 //       itself), then its next ones up to 12 optimized in all. A keyframe the walk reaches twice (the matched
 //       keyframe the last of its map) is taken once: the original adds it twice;
-//     - local points: the good points of the optimized keyframes (per feature, left and right) not taken yet,
-//       and not taken by the last local BA of the last keyframe (mnBALocalForKF: m.point_scratch, by the local
-//       BA's problems), which are only counted; each counted once per feature that sees it;
+//     - local points: the good points of the optimized keyframes (per feature, left and right), each counted
+//       once per feature that sees it. The original leaves out (only counts) the ones the last local BA of the
+//       last keyframe took (mnBALocalForKF: m.point_scratch, by the local BA's problems), i.e. most of the
+//       current side's: the current keyframes then move onto the fused points of the merge map and leave their
+//       own behind (algorithms/orb_loop_closing/docs/DESIGN.md, 階段 4). Taken here; original_points (the
+//       fixture test) keeps the original's;
 //     - more covisible keyframes: the 30 points seen least (std::sort of the counts in id order, the
 //       original's pointer order), each the first of its observers (by id) neither optimized nor fixed yet,
 //       marked, and taken when good;
@@ -50,9 +54,9 @@ namespace orb_loop_closing {
 
 std::optional<ba::Problem> alignMergeInertial(map::Atlas& a, local_mapping::LocalMapper& m);
 void applyMergeBias(map::Atlas& a, local_mapping::LocalMapper& m, const ba::Result& r);
-std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m);
+std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m, bool original_points = false);
 ba::Problem mergeInertialBAProblem(map::Atlas& a, local_mapping::LocalMapper& m, map::KeyFrameId last_kf,
-                                   map::KeyFrameId merge_kf);
+                                   map::KeyFrameId merge_kf, bool original_points = false);
 void applyMergeInertialBA(map::Atlas& a, map::MapId map, const ba::Result& r);
 
 }  // namespace orb_loop_closing

@@ -1,12 +1,14 @@
 // make_frame: Tracking::GrabStereoFeatures (the Frame of a stereo message) and, when the calibration changes,
 // newParameterLoader (the stereo rig in the atlas, mTlr, ThDepth, the IMU calibration). Also the settings of the
 // run: inertial (System::IMU_STEREO) from params.sensor, mMaxFrames and mnFramesToResetIMU from params.fps.
+// And the frame's IMU for the odom frame (not in ORB-SLAM3; shared/odom.hpp).
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
 #include <Eigen/Geometry>
 
+#include "algorithms/orb_tracking/shared/odom.hpp"
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 #include "params/orb_tracking_params.hpp"
 #include "types/calib/stereo_imu_rig.hpp"
@@ -95,6 +97,7 @@ fw::bt::Status make_frame(fw::Msg<orb::StereoFrame> frame, const calib::StereoIm
     s.has_imu_calib = t.inertial;
     s.T_cb = t.T_cb;
     t.current = tracking::makeFrame(std::static_pointer_cast<const orb::StereoFrame>(frame.any().data), s);
+    orb_tracking::accumulateOdomImu(t.odom, t.current);  // for odom across a new map (odom.hpp)
     t.new_keyframe = false;
     orb_tracking::sendEdits(t, seq, atlas_edits);
     return fw::bt::Status::SUCCESS;

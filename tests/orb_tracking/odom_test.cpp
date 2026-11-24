@@ -1,4 +1,4 @@
-// orb_tracking/publish_frame/odom: the continuous odom frame (not in ORB-SLAM3, so no fixture of its answers).
+// orb_tracking/shared/odom: the continuous odom frame (not in ORB-SLAM3, so no fixture of its answers).
 // A frame of the pose_optimization fixture is published, then the map changes and the same frame (no motion) is
 // tracked again in the new map; odom must not move:
 //   - nothing changed: D = I
@@ -6,13 +6,14 @@
 //   - a non-rigid change (the points near the frame and the reference keyframe move differently, as a BA):
 //     re-localizing the last frame keeps odom still, where the reference keyframe's motion alone would not
 //   - too few points left: the reference keyframe's motion
-//   - another map: odom goes on from the last pose
+//   - another map: odom goes on from the last pose by the motion the IMU measured since (also over frames that
+//     were not published), the rotation alone when the last map's IMU was not initialized, none without IMU
 #include <cmath>
 #include <cstdio>
 #include <functional>
 #include <string>
 
-#include "algorithms/orb_tracking/publish_frame/odom.hpp"
+#include "algorithms/orb_tracking/shared/odom.hpp"
 #include "algorithms/orb_tracking/shared/pose_optimizer.hpp"
 #include "tests/orb_tracking/fixture_frame.hpp"
 
@@ -75,9 +76,10 @@ struct Scene {
         atlas.keyframes.edit(0).set(kf);
         obs.frame.reference_kf = 0;
     }
-    void setMap(map::MapId id) {
+    void setMap(map::MapId id, bool imu_initialized = false) {
         map::Map m;
         m.id = id;
+        m.imu_initialized = imu_initialized;
         atlas.maps.edit(id).set(m);
         atlas.current = id;
     }
@@ -110,6 +112,8 @@ const char* sourceName(orb_tracking::OdomSource s) {
         case orb_tracking::OdomSource::anchor: return "anchor";
         case orb_tracking::OdomSource::none: return "none";
         case orb_tracking::OdomSource::new_map: return "new_map";
+        case orb_tracking::OdomSource::new_map_imu: return "new_map_imu";
+        case orb_tracking::OdomSource::new_map_gyro: return "new_map_gyro";
     }
     return "?";
 }
@@ -215,6 +219,83 @@ void newMap() {
     expectStill("new map", u0, u1, orb_tracking::OdomSource::new_map, 1e-6, 1e-6);
 }
 
+// The IMU across a new map. The body: constant angular velocity w (body), constant world acceleration acc_w, from
+// the last published frame's state (its pose, a velocity, a bias); the measurements carry that bias. Two frames
+// of 1 s each follow: the first is not published (a discontinuity), the second is the new map's first.
+struct Motion {
+    Eigen::Matrix3d Rwb1;
+    Eigen::Vector3d twb1, v1, w, acc_w;
+    imu::Bias b;
+    Eigen::Matrix3d R(double t) const { if (t == 0) return Rwb1; return Rwb1 * Eigen::AngleAxisd((w * t).norm(), (w * t).normalized()).toRotationMatrix(); }
+    Eigen::Vector3d p(double t) const { return twb1 + v1 * t + 0.5 * acc_w * t * t; }
+    // The preintegration (zero bias, as imu_preintegration sends it) over [t0, t1] of the last frame's time
+    std::shared_ptr<const imu::Preintegrated> measure(double t0, double t1) const {
+        const Eigen::Vector3d g(0, 0, -9.81);
+        auto p = std::make_shared<imu::Preintegrated>(imu::Bias(), imu::Noise::fromDensities(1.7e-4f, 2e-3f, 2e-5f, 3e-3f));
+        const int n = int(std::lround((t1 - t0) * 200));
+        const double dt = (t1 - t0) / n;
+        for (int k = 0; k < n; ++k) {
+            const double tm = t0 + k * dt;  // the integrator rotates a step's sample by ΔR at its start
+            const Eigen::Vector3f acc = (R(tm).transpose() * (acc_w - g)).cast<float>() + b.a;
+            const Eigen::Vector3f gyro = w.cast<float>() + b.g;
+            p->integrate(acc, gyro, float(dt));
+        }
+        return p;
+    }
+};
+
+tracking::Frame withImu(const tracking::Frame& f, double timestamp, std::shared_ptr<const imu::Preintegrated> imu) {
+    auto st = std::make_shared<orb::StereoFrame>(*f.features->stereo);
+    st->imu = std::move(imu);
+    tracking::Frame r = f;
+    r.features = std::make_shared<orb::FrameFeatures>(st);
+    r.timestamp = timestamp;
+    return r;
+}
+
+void newMapImu(const char* name, bool imu_initialized, bool break_imu, orb_tracking::OdomSource source, double max_t,
+               double max_r) {
+    Scene s("nominal");
+    s.setMap(0, imu_initialized);
+    tracking::Frame& last = s.obs.frame;
+    last.timestamp = 10;
+    last.has_imu_calib = true;
+    last.T_cb = geometry::SE3f(Eigen::Matrix3f(Eigen::AngleAxisf(0.5f, Eigen::Vector3f(1, 2, 0).normalized())),
+                               Eigen::Vector3f(0.02f, -0.06f, 0.01f));
+    Motion m;
+    const geometry::SE3f Twb = last.imuPose();
+    m.Rwb1 = Twb.rotationMatrix().cast<double>();
+    m.twb1 = Twb.translation().cast<double>();
+    m.v1 = Eigen::Vector3d(0.4, -0.2, 0.1);
+    m.w = Eigen::Vector3d(0.1, -0.3, 0.9);  // 2 s: about 110°, as the V1_02 gap
+    m.acc_w = Eigen::Vector3d(0.2, 0.1, -0.05);
+    m.b.g = Eigen::Vector3f(0.003f, -0.002f, 0.004f);
+    m.b.a = Eigen::Vector3f(0.05f, -0.03f, 0.02f);
+    last.bias = m.b;
+    last.setVelocity(m.v1.cast<float>());
+    const orb_tracking::OdomUpdate u0 = orb_tracking::updateOdom(s.odom, last, s.atlas);
+
+    const tracking::Frame skipped = withImu(last, 11, break_imu ? nullptr : m.measure(0, 1));
+    orb_tracking::accumulateOdomImu(s.odom, skipped);
+    tracking::Frame f = withImu(last, 12, m.measure(1, 2));
+    orb_tracking::accumulateOdomImu(s.odom, f);
+    s.setMap(1);
+    f.setPose(geometry::SE3f());  // the new map's origin
+    const orb_tracking::OdomUpdate u1 = orb_tracking::updateOdom(s.odom, f, s.atlas);
+
+    // The truth: the camera's motion since the last frame, in the last map
+    Eigen::Isometry3d Twb2 = Eigen::Isometry3d::Identity();
+    Twb2.linear() = m.R(2);
+    Twb2.translation() = m.p(2);
+    const Eigen::Isometry3d Twc1 = iso(last.pose().inverse()), Twc2 = Twb2 * iso(last.T_cb.inverse());
+    const Eigen::Isometry3d expected = u0.T_odom_cam * Twc1.inverse() * Twc2;
+    double t, r;
+    distance(expected, u1.T_odom_cam, t, r);
+    std::printf("%-26s %-12s           odom off  %.2e m %.2e rad\n", name, sourceName(u1.source), t, r);
+    check(u1.source == source, std::string(name) + ": source " + sourceName(u1.source));
+    check(t < max_t && r < max_r, std::string(name) + ": odom off the true motion");
+}
+
 }  // namespace
 
 int main() {
@@ -222,6 +303,11 @@ int main() {
     nonRigid();
     fewPoints();
     newMap();
+    // Exact up to the integration in float
+    newMapImu("new map, IMU", true, false, orb_tracking::OdomSource::new_map_imu, 1e-3, 1e-4);
+    // No translation predicted: off by what the body moved (about 1 m), the rotation still right
+    newMapImu("new map, gyro", false, false, orb_tracking::OdomSource::new_map_gyro, 2.0, 1e-4);
+    newMapImu("new map, IMU broken", true, true, orb_tracking::OdomSource::new_map, 10.0, 10.0);
     std::printf(failures ? "%d failures\n" : "all passed\n", failures);
     return failures ? 1 : 0;
 }

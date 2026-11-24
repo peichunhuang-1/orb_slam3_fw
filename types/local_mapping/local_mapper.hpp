@@ -161,7 +161,8 @@ struct LocalMapper {
     // Merges not done (another loop or merge pending, the map changed since the detection, a keyframe gone bad or
     // a reset meanwhile), done
     std::uint64_t merges_busy = 0, merges_stale = 0, merges_gone = 0, merges_done = 0;
-    // mvpMergeConnectedKFs: LoopClosing's member, never cleared (MergeLocal2 appends and keeps the first 6)
+    // mvpMergeConnectedKFs (LoopClosing's member): the last merge's matched keyframe and its covisibles, the first
+    // 6. The original never clears it (a later merge would fuse the first one's); cleared per merge here
     std::vector<map::KeyFrameId> merge_connected_kfs;
 
     PendingLoop loop;

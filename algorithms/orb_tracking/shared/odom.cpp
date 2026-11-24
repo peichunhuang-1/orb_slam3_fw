@@ -1,10 +1,11 @@
-#include "algorithms/orb_tracking/publish_frame/odom.hpp"
+#include "algorithms/orb_tracking/shared/odom.hpp"
 
 #include <cmath>
 #include <limits>
 #include <vector>
 
 #include "algorithms/orb_tracking/shared/pose_optimizer.hpp"
+#include "types/geometry/so3.hpp"
 
 namespace orb_tracking {
 
@@ -27,10 +28,42 @@ bool anchorMotion(const tracking::OdomState& s, const map::Atlas& a, Eigen::Isom
     return true;
 }
 
+// The last published frame's camera to f's, both in the last frame's map, from the IMU since (odom.hpp). false:
+// no unbroken IMU record up to f.
+bool imuMotion(const tracking::OdomState& s, const tracking::Frame& f, Eigen::Isometry3d& M, OdomSource& source) {
+    constexpr float kGravity = 9.81f;  // IMU::GRAVITY_VALUE
+    const tracking::Frame& l = s.last;
+    if (!s.imu_ok || !s.imu || !l.has_imu_calib || s.imu_until != f.timestamp) return false;
+    const double span = f.timestamp - l.timestamp;
+    if (span <= 0 || std::abs(double(s.imu->dT) - span) > 1e-3) return false;  // a frame's interval missing
+    imu::Preintegrated p = *s.imu;
+    p.setNewBias(l.bias);
+    p.reintegrate();  // at the last bias: dR, dV, dP are exact there
+    const float dt = p.dT;
+    const Eigen::Matrix3f Rwb1 = l.imuRotation();
+    const Eigen::Vector3f twb1 = l.imuPosition();
+    const Eigen::Matrix3f Rwb2 = geometry::normalizeRotation(Eigen::Matrix3f(Rwb1 * p.dR));
+    Eigen::Vector3f twb2 = twb1;
+    source = OdomSource::new_map_gyro;
+    if (s.last_inertial && l.hasVelocity() && span <= kOdomImuMaxGap) {  // PredictStateIMU
+        const Eigen::Vector3f Gz(0, 0, -kGravity);
+        twb2 = twb1 + l.velocity() * dt + 0.5f * dt * dt * Gz + Rwb1 * p.dP;
+        source = OdomSource::new_map_imu;
+    }
+    // Twc = Twb · Tbc
+    const geometry::SE3f Twc2 = geometry::SE3f(Rwb2, twb2) * l.T_cb.inverse();
+    M = iso(l.pose()) * iso(Twc2);
+    return true;
+}
+
 void remember(tracking::OdomState& s, const tracking::Frame& f, const map::Atlas& a) {
     s.started = true;
     s.map = a.current;
     s.last = f;
+    s.imu.reset();
+    s.imu_ok = true;
+    s.imu_until = f.timestamp;
+    s.last_inertial = a.imuInitialized();
     // Only what PoseOptimization reads is needed; drop the shared IMU state
     s.last.preintegrated.reset();
     s.last.preintegrated_frame.reset();
@@ -50,6 +83,19 @@ void remember(tracking::OdomState& s, const tracking::Frame& f, const map::Atlas
 
 }  // namespace
 
+void accumulateOdomImu(tracking::OdomState& s, const tracking::Frame& f) {
+    if (!s.started || !s.imu_ok) return;
+    const imu::Preintegrated* p = f.features && f.features->stereo ? f.features->stereo->imu.get() : nullptr;
+    if (!p || f.timestamp <= s.imu_until) {
+        s.imu_ok = false;
+        s.imu.reset();
+        return;
+    }
+    if (!s.imu) s.imu = *p;
+    else s.imu->append(*p);
+    s.imu_until = f.timestamp;
+}
+
 OdomUpdate updateOdom(tracking::OdomState& s, const tracking::Frame& f, const map::Atlas& a) {
     OdomUpdate u;
     const Eigen::Isometry3d Twc = iso(f.pose().inverse());
@@ -57,9 +103,12 @@ OdomUpdate updateOdom(tracking::OdomState& s, const tracking::Frame& f, const ma
         s.T_map_odom.setIdentity();
         u.source = OdomSource::first;
     } else if (a.current != s.map) {
+        // f's camera in odom: the last one's, moved by the motion since (in the last map)
         const Eigen::Isometry3d T_odom_last = s.T_map_odom.inverse() * iso(s.last.pose().inverse());
-        s.T_map_odom = Twc * T_odom_last.inverse();
+        Eigen::Isometry3d M = Eigen::Isometry3d::Identity();
         u.source = OdomSource::new_map;
+        if (!imuMotion(s, f, M, u.source)) u.source = OdomSource::new_map;
+        s.T_map_odom = Twc * (T_odom_last * M).inverse();
     } else {
         // The last frame's inlier points: then and now; did any move?
         const std::size_t n = s.last.points.size();

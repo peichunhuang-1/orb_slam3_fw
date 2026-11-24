@@ -76,6 +76,16 @@ MapId createNewMap(Atlas& a, MapId id) {
     return a.current;
 }
 
+void setMapBad(Atlas& a, MapId id) {
+    const Map* m = a.findMap(id);
+    if (!m || id == a.current) return;
+    Map bad = *m;
+    bad.bad = true;
+    bad.in_use = false;
+    a.maps.erase(id);
+    a.bad_maps.edit(id).set(std::move(bad));
+}
+
 void clearMap(Atlas& a, MapId id) {
     Map* m = a.editMap(id);
     if (!m) return;

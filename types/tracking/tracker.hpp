@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -46,6 +47,14 @@ struct OdomState {
     // re-localization)
     map::KeyFrameId anchor = map::kNone;
     geometry::SE3f anchor_Twc;
+    // The IMU since the last published frame (each frame's zero-bias preintegration, appended by make_frame,
+    // also for the frames not published), to bridge to a new map. imu_ok: no frame without IMU data or going
+    // back in time since; imu_until: the last frame appended. last_inertial: the last frame's map had its IMU
+    // initialized (gravity along -z, the frame's velocity and bias are estimated).
+    std::optional<imu::Preintegrated> imu;
+    bool imu_ok = false;
+    double imu_until = 0;
+    bool last_inertial = false;
 };
 
 // A map point's projection in the current frame (MapPoint::mbTrackInView(R), mTrackProjX(R), mTrackProjY(R),

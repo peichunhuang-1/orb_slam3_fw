@@ -574,7 +574,9 @@ into pass A's. The scene differs from `merge` in these ways:
   `after_merge_connected` (`mvpMergeConnectedKFs`), `after_change_index`, `after_ba2`.
 
 The port runs `alignMergeInertial`, then (when there is no BA2) the `inertial_init` kind with the gravity fixed and
-`applyMergeBias`, then `joinMaps`, the `merge_inertial` kind and `applyMergeInertialBA`.
+`applyMergeBias`, then `joinMaps`, the `merge_inertial` kind and `applyMergeInertialBA`. The comparison below is
+with `joinMaps(…, original_points)`, the original's choice of points: the port's own also takes the points of the
+last local BA (algorithms/orb_loop_closing/docs/DESIGN.md, 階段 4), so its BA results are not the original's.
 - **Exact matches:** the problem (`merge_inertial`: 12 + 7 optimized keyframes, 1 fixed, 459 points, 8,067
   observations), which map each keyframe and point is in, the spanning tree, `mvpMergeConnectedKFs`, the fused
   points and the bad flags.

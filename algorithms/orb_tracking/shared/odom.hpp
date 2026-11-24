@@ -16,8 +16,16 @@
 //
 // The second solve starts from the last frame moved with its reference keyframe (the anchor): a rotation of the
 // whole map (IMU initialization: up to ~100°) is far outside the optimizer's reach from the old pose. With too
-// few inliers in either solve D is the anchor's motion alone; without an anchor, I. A new map (after LOST, a
-// reset) has no relation to the last one: odom goes on from the last published pose.
+// few inliers in either solve D is the anchor's motion alone; without an anchor, I.
+//
+// A new map (a discontinuity, LOST, a reset) has no relation to the last one, and the frames in between were not
+// published: the motion since the last published frame comes from the IMU received since (s.imu, every frame's
+// zero-bias preintegration, appended by accumulateOdomImu). From the last frame's body state in its map
+// (PredictStateIMU: the bias, the velocity and gravity along -z, all known once that map's IMU is initialized)
+// the frame's camera is predicted, and odom goes on by that motion. The rotation alone (the gyro, at the last
+// bias) when the last map's IMU was not initialized or the interval is longer than kOdomImuMaxGap (the double
+// integration of an acc bias error grows as t²); none at all without an unbroken IMU record (stereo, a frame
+// without IMU data, time going back).
 #include <Eigen/Geometry>
 
 #include "types/map/atlas.hpp"
@@ -32,7 +40,9 @@ enum class OdomSource {
     relocalized,  // D from the last frame localized again
     anchor,       // D from the reference keyframe's motion (too few inliers)
     none,         // points moved but neither works: D = I
-    new_map,      // another map: odom goes on from the last pose
+    new_map,      // another map, no IMU: odom goes on from the last pose
+    new_map_imu,  // another map: the motion since the last pose from the IMU
+    new_map_gyro, // another map: the rotation since the last pose from the gyro, no translation
 };
 
 struct OdomUpdate {
@@ -43,6 +53,10 @@ struct OdomUpdate {
 };
 
 constexpr int kOdomMinInliers = 30;  // as TrackLocalMap's for a tracked frame
+constexpr double kOdomImuMaxGap = 5.0;  // s: the longest interval predicted with the accelerometer
+
+// For each frame tracking receives (before it is tracked or skipped): its IMU since the frame before
+void accumulateOdomImu(tracking::OdomState& s, const tracking::Frame& f);
 
 // For frame f (with a pose, about to be published) in atlas a (the view it was tracked in): updates s and
 // returns the transforms. a.current is f's map.

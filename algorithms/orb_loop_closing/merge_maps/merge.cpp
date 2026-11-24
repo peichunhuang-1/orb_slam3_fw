@@ -101,7 +101,7 @@ void applyMergeBias(map::Atlas& a, local_mapping::LocalMapper& m, const ba::Resu
     }
 }
 
-std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m) {
+std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m, bool original_points) {
     local_mapping::PendingMerge& g = m.merge;
     const map::MapId to = g.current_map, from = g.merge_map;
 
@@ -117,6 +117,7 @@ std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m
             if (!a.point(p)->bad) map::movePoint(a, p, to);
         if (const map::Map* F = a.findMap(from))
             if (map::KeyFrame* o = a.editKeyFrame(F->initial_kf)) o->first_connection = false;
+        map::setMapBad(a, from);  // the original's MergeLocal2 leaves it (MergeLocal sets its merged map bad)
     }
 
     // The spanning tree: the matched keyframe's path to its root reversed, under the current keyframe
@@ -135,6 +136,7 @@ std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m
 
     // The welding area: the matched side's points fused into the current side
     std::vector<KeyFrameId>& merge_kfs = m.merge_connected_kfs;
+    merge_kfs.clear();  // the original's member is never cleared: a later merge would fuse the first one's
     merge_kfs.push_back(g.matched_kf);
     {
         const std::vector<KeyFrameId> aux = a.keyframe(g.matched_kf)->ordered_connected;
@@ -169,11 +171,11 @@ std::optional<ba::Problem> joinMaps(map::Atlas& a, local_mapping::LocalMapper& m
         if (a.goodKeyFrame(k)) map::updateConnections(a, k);
 
     if (g.n_new < 10) return std::nullopt;
-    return mergeInertialBAProblem(a, m, g.last_kf, g.matched_kf);
+    return mergeInertialBAProblem(a, m, g.last_kf, g.matched_kf, original_points);
 }
 
 ba::Problem mergeInertialBAProblem(map::Atlas& a, local_mapping::LocalMapper& m, KeyFrameId last_kf,
-                                   KeyFrameId merge_kf) {
+                                   KeyFrameId merge_kf, bool original_points) {
     const int Nd = 6;
     const std::size_t maxCovKF = 30;
     const KeyFrameId max_kf = last_kf;
@@ -229,13 +231,15 @@ ba::Problem mergeInertialBAProblem(map::Atlas& a, local_mapping::LocalMapper& m,
     }
 
     // Local points, and the observation counts of every good point the optimized keyframes see
+    // (original_points: a point the last keyframe's last local BA took counts as taken already)
     std::vector<MapPointId> points;
     std::unordered_map<MapPointId, int> obs_count;
     for (const KeyFrameId k : opt)
         for (const MapPointId pid : a.keyframe(k)->points) {
             if (pid == map::kNone || !a.goodPoint(pid)) continue;
             local_mapping::PointScratch& s = pointScratch(m, pid);
-            if (s.ba_local_for != last_kf) {
+            const bool taken = original_points ? s.ba_local_for == last_kf : obs_count.count(pid) != 0;
+            if (!taken) {
                 obs_count[pid] = 1;
                 points.push_back(pid);
                 s.ba_local_for = last_kf;

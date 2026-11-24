@@ -98,25 +98,31 @@
   - 葉節點 `MergeMaps`（`merge_maps/merge_maps.cpp`，stateful，等 `ba_solver` 時 RUNNING）、`is_merge_pending`。
   - `ba_solver/merge_inertial.{hpp,cpp}`（新的 `merge_inertial` 種類）；`inertial_init` 加 `fixed_gravity`（Rwg 固定：只估 bias 與速度）。
   - atlas：`moveKeyFrame`、`movePoint`、`eraseChild`、`addMergeEdge`。
-  - `local_mapper.merge`（`PendingMerge`）、`merge_connected_kfs`（原版的成員 `mvpMergeConnectedKFs`，從不清空）、計數 `merges_busy`、`merges_stale`、`merges_gone`、`merges_done`；`PointScratch::ba_local_for`（點的 `mnBALocalForKF`，local BA 建問題時記下）。
+  - `local_mapper.merge`（`PendingMerge`）、`merge_connected_kfs`（原版的成員 `mvpMergeConnectedKFs`）、計數 `merges_busy`、`merges_stale`、`merges_gone`、`merges_done`；`PointScratch::ba_local_for`（點的 `mnBALocalForKF`，local BA 建問題時記下）。
   - `apply_loop_result` 接下 merge（與 loop 相同的條件：沒有別的 loop／merge 在等、big change 沒變、兩個 keyframe 都還 good）；`loop_closing` 的 merge 也標 `erase_after_correction` 與 `big_change`。`correct_map` 樹多一個輸出 `mapper`（`UpdateFrameIMU`）。
 - 照原版保留的怪處：
-  - `MergeLocal2` 不把舊地圖設為 bad：合併後它留在 atlas 裡，是空的（`CountMaps` 仍是 2，之後 GBA 的「只有一張地圖」條件不成立）。
   - 不加 merge edge、不 `InformNewBigChange`；也不重開被停掉的 GBA（`bRelaunchBA` 只有 `MergeLocal` 用）。
-  - `mvpMergeConnectedKFs` 是成員，只 push 不清：第二次合併時融合用的還是第一次的那幾個 keyframe。
-  - `MergeInertialBA` 不收「目前 keyframe 上一次 local BA 已經拿過的點」（點的 `mnBALocalForKF` 等於它的 id），只計數；所以目前這一側幾乎只靠融合來的舊地圖點與 IMU 邊。covisible keyframe 從被看到最少的 30 個點挑（`std::sort` 不穩定，輸入照 id 排，對應原版的指標順序）。
+  - `MergeInertialBA` 的 covisible keyframe 從被看到最少的 30 個點挑（`std::sort` 不穩定，輸入照 id 排，對應原版的指標順序）。
 - 和原版不同的地方：
+  - `MergeInertialBA` 也收目前這一側的點。原版不收「目前 keyframe 上一次 local BA 已經拿過的點」（點的 `mnBALocalForKF` 等於它的 id），只計數：目前視窗的 keyframe 只靠融合來的舊地圖點與 IMU 邊，被拉到舊地圖的點上，目前地圖自己的點留在原處，地圖前後不一致（fixture 上 BA 之後，目前這一側對融合點的重投影誤差中位數 2.4 → 1.4 px，對自己的點 2.2 → 2.6 px；收了之後兩者都是 1.4 px）。V1_02 上這讓合併那一幀的 odom 跳了 12 cm（見下面實跑）。`joinMaps(…, original_points)` 保留原版的選法，只給 fixture 測試用。
+  - 合併後舊地圖設為 bad（`setMapBad`，`Atlas::SetMapBad`），`CountMaps` 回到 1。原版的 `MergeLocal2` 讓它留在 atlas 裡（是空的），之後 loop 修正後啟動 GBA 的「只有一張地圖」條件就永遠不成立；`MergeLocal` 則會設為 bad。
+  - `mvpMergeConnectedKFs` 每次合併先清空。原版是只 push 不清的成員，第二次合併時融合用的還是第一次的那幾個 keyframe。
   - 右影像獨有的觀測不進 `MergeInertialBA`。原版讀它的左 feature index，是 −1（未定義行為）：在有這種觀測的場景上，cost 從第一次迭代就是 NaN，LM 每一步都被拒絕，什麼都沒動（reference 自己加的「非有限值就不寫回」大概就是為此）。
   - 走訪碰到同一個 keyframe 兩次（matched keyframe 是它地圖的最後一個）時只收一次；原版會加兩次。
   - `UpdateFrameIMU` 經由 status（`imu_update_seq`）送給 tracking，與 IMU 初始化相同。tracker 的 last keyframe 用 local mapping 清完佇列後的目前 keyframe。
-- fixture（`loop/merge_inertial.txt`、`loop/merge_inertial_bias.txt`，原版的 `MergeLocal2`；場景見 fixtures 的 README）：
-  - 完全相同：問題（12 + 7 個最佳化的 keyframe、1 個固定、459 個點、8,067 個觀測）、keyframe 與點在哪張地圖、spanning tree、`mvpMergeConnectedKFs`、融合結果、bad 旗標。
-  - 數值：位姿 1e-4°、2e-6 m；速度 1e-5 m/s；舊地圖那側的 bias 2e-7，目前視窗的 bias 有一個共同的 4e-5 偏移（BA 移動了最多 0.13，8 次迭代沒收斂）。
+- fixture（`loop/merge_inertial.txt`、`loop/merge_inertial_bias.txt`，原版的 `MergeLocal2`；場景見 fixtures 的 README）：每個場景跑兩次。
+  - 原版的選點（`original_points`），與原版比：
+    - 完全相同：問題（12 + 7 個最佳化的 keyframe、1 個固定、459 個點、8,067 個觀測）、keyframe 與點在哪張地圖、spanning tree、`mvpMergeConnectedKFs`、融合結果、bad 旗標。
+    - 數值：位姿 1e-4°、2e-6 m；速度 1e-5 m/s；舊地圖那側的 bias 2e-7，目前視窗的 bias 有一個共同的 4e-5 偏移（BA 移動了最多 0.13，8 次迭代沒收斂）。
+  - 這裡的選點：BA 之前的部分與原版相同；問題多了上一次 local BA 的點（62 與 71 個，521 與 523 個點）；BA 之後目前這一側對自己的點與對融合點的重投影誤差一致（上面），位姿與原版差 0.01°、1 mm。
+  - 兩次都檢查：舊地圖是空的、是 bad，地圖只剩一張。
 - V1_02 實跑（`slam_merge_job`）：
   - 缺口在 30–32 s 時沒有 merge（254 個 merge 候選都沒通過，同階段 1）。缺口改到 45–47 s（`config/frame_gate.yaml`）：第二張地圖的 IMU 初始化與 BA2 之後，66 s 回到第一張地圖的區域。
-  - kf 303（地圖 1）與 kf 169（地圖 0）偵測到 merge，`MergeInertialBA` 35 個 keyframe、629 個點，8 次迭代 45 ms；job 照常自己結束。
+  - kf 303（地圖 1）與 kf 169（地圖 0）偵測到 merge，`MergeInertialBA` 35 個 keyframe、1,117 個點（原版的選法 629 個），8 次迭代 60 ms；job 照常自己結束。
   - map 座標下分段對齊：地圖 0（20–45 s）旋轉 122.9°、t (0.93, 2.05, 0.72)，誤差 2.2 cm；合併前的地圖 1（55–66 s）是自己的座標（62°）；合併後（66.3–90 s）122.1°、t (0.90, 2.07, 0.72)，誤差 2.1 cm。地圖 0 與合併後一起用一個對齊：2.6 cm（地圖 0 自己 2.2 cm）。也就是合併把目前的地圖放回了地圖 0 的座標。
-  - 整條軌跡的 ATE 很大（odom 1.57 m），來自兩件與合併無關的事：合併前地圖 1 在自己的座標裡；tracking 開新地圖時 odom 跳了約 40°（缺口在 30–32 s、沒有合併的那次也有，odom 0.35 m）。odom 在換地圖時不連續是 tracking 既有的行為。
+  - 整條軌跡的 ATE：odom 0.184 m（只以 IMU 接續換地圖、`MergeInertialBA` 照原版時 0.207 m；兩者都沒有時 1.95 m）。之前 tracking 換地圖時 odom 從上一個位姿原地接下去，缺口 2.5 s 內的移動（約 115°、1.4 m）全部遺失；現在以缺口期間的 IMU 接續（orb_tracking 的 DESIGN.md，「換地圖時以 IMU 接續」），缺口前後兩段的對齊差 2.8°、0.29 m（IMU 推算 2.5 s 的誤差：那一步 23 cm）。map 座標、合併之後（66.5 s 起）：0.018 m（照原版 0.022 m）。`slam_job` 沒有換地圖，不受影響（0.0935 m，逐位元相同）。
+  - 合併的那個影格（66.10 s）：照原版的 `MergeInertialBA` 時 odom 跳了 12 cm。上一個影格的點裡，被融合的（171 個，舊地圖的點）與沒被融合的（296 個，目前地圖的點）看到的地圖變化差 9 cm：目前視窗的 keyframe 被拉到舊地圖的點上，目前地圖的其餘點留在原處；tracking 跟著舊地圖的點走，odom 的 D 跟著多數（沒被融合的）點走。`MergeInertialBA` 收了目前這一側的點之後，這一步的誤差變化 3 mm。（試過讓 odom 跟著 `replaced` 找融合後的點：這一步不變，`slam_job` 反而變差，0.0935 → 0.1000 m，沒有採用。）
+  - 舊地圖設為 bad 與 `mvpMergeConnectedKFs` 清空在這條資料上不影響結果（只有一次合併，之後沒有 loop）。
 
 **驗收**：V1_02 上整條軌跡的 ATE 與原版相近、loop 的次數相近。中間狀態不要求一致（原版的三條執行緒時序本身不固定）。函式層以 `fixture_gen` 的答案比對，是為了除錯，不是驗收條件。
 

@@ -4,7 +4,7 @@
 // for every frame.
 #include <Eigen/Geometry>
 
-#include "algorithms/orb_tracking/publish_frame/odom.hpp"
+#include "algorithms/orb_tracking/shared/odom.hpp"
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 #include "fw/ros/msgs/geometry.hpp"
 #include "types/tracking/status.hpp"

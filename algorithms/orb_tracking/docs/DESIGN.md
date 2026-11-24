@@ -63,14 +63,15 @@
 - **`map`**：atlas 目前的世界座標系，就是原版的座標系，會被重新定錨。地圖、最佳化、`relative_poses` 軌跡清單都照原版，完全不受影響。
 - **`odom`**：連續的座標系，起點是第一個送出的影格當下的 `map`（雙目初始化時：第一個相機的座標系，z 軸不對齊重力）。之後只累積影格之間的移動，地圖怎麼被搬都不會跳。需要重力對齊或全域一致的位置時，用 `map_to_odom` 換回 `map`：body 在 `map` 中 = `map_to_odom · pose`。
 
-**作法：在新的地圖上重新定位上一個影格**（[`publish_frame/odom`](../publish_frame/odom.hpp)，每個送出 `pose` 的影格）。不需要 local mapping 送任何新訊息：地圖的每一種移動都反映在點的位置上。
+**作法：在新的地圖上重新定位上一個影格**（[`shared/odom`](../shared/odom.hpp)，每個送出 `pose` 的影格）。不需要 local mapping 送任何新訊息：地圖的每一種移動都反映在點的位置上。
 
 ```
 tracker.odom 存：T_map_odom（初值 I）、上一個送出的影格（位姿、特徵、點、outlier）、它的 inlier 點在送出當時的位置、
                 它的 reference keyframe（錨點）與錨點當時的 Twc、所在的地圖
 
 每個送出 pose 的影格 f（Twc：f 在目前的 map 中）：
-  1. 地圖換了（LOST 後的新地圖、重設）：T_map_odom = Twc · (上一個影格在 odom 中)⁻¹      odom 從上一個位姿接下去
+  1. 地圖換了（缺口、LOST 後的新地圖、重設）：M = 上一個影格到 f 的相機移動（上一張地圖裡，由之後收到的 IMU 預測）
+       T_map_odom = Twc · (上一個影格在 odom 中 · M)⁻¹                                  odom 從上一個位姿接下去
   2. 否則，上一個影格的 inlier 點有沒有移動：
        沒有：D = I
        有：  T_then = PoseOptimization(上一個影格, 點在當時的位置)，從它原本的位姿開始
@@ -95,8 +96,12 @@ tracker.odom 存：T_map_odom（初值 I）、上一個送出的影格（位姿�
 - 只在上一個影格的點真的移動時才解（約每個 keyframe 一次，local BA 之後），每次兩個 PoseOptimization。
 - inlier 太少（LOST 剛恢復、RECENTLY_LOST 時以 IMU 預測的位姿）時退回錨點的移動；錨點也不在時 D = I。
 - LOST 期間不送 pose；同一張地圖上重新定位之後，odom 的跳動就是重新定位修正的量（LOST 期間本來就不知道位姿）。
+- **換地圖時以 IMU 接續。** 新地圖與上一張沒有關係，中間的影格（缺口後的第一個影格會觸發 discontinuity，不會送出）也沒有送出。`make_frame` 把每個收到的影格的 IMU（`imu_preintegration` 的零 bias 預積分）接在 `odom.imu` 後面，送出一個影格時清空。換地圖時從上一個影格的 body 狀態預測（`PredictStateIMU`：以上一個影格的 bias 重新積分、速度、重力沿 −z）：
+  - 上一張地圖的 IMU 已初始化、間隔不超過 5 s（`kOdomImuMaxGap`；加速度 bias 誤差的二次積分隨 t² 增加）：旋轉與位置（`new_map_imu`）。
+  - 否則只有旋轉（陀螺儀，`new_map_gyro`），body 的位置不動。
+  - IMU 記錄中斷（stereo、沒有 IMU 的影格、時間倒退，或 IMU 的 dT 與兩個影格的時間差不符）：M = I（`new_map`，原本的作法）。
 - keyframe 的 id 在整個 atlas 重設後會重新開始，所以先比較地圖（第 1 步）。map 的 id 不會重用。
-- 單元測試 `orb_tracking_odom_test`（pose_optimization fixture 的影格，同一個影格在變化後的地圖上重新追蹤，odom 應該不動）：100° 的剛體變化 1 µm；幾公分的非剛體變化 0.7 mm（只用錨點時 137 mm）；點太少時退回錨點；換地圖時接續。
+- 單元測試 `orb_tracking_odom_test`（pose_optimization fixture 的影格，同一個影格在變化後的地圖上重新追蹤，odom 應該不動）：100° 的剛體變化 1 µm；幾公分的非剛體變化 0.7 mm（只用錨點時 137 mm）；點太少時退回錨點；換地圖時接續：以 IMU（2 s、約 110° 的旋轉，中間一個影格沒有送出）位置差 0.07 mm、旋轉 4e-6 rad，只有陀螺儀時旋轉相同，IMU 中斷時不動。
 
 `tools/ate.py` 預設用連續的 `pose`（`odom`）算 ATE，`--frame map` 換回原版的即時輸出比較；兩者都印出逐影格的步長誤差（與 ground truth 的移動比，就是跳動）。
 
