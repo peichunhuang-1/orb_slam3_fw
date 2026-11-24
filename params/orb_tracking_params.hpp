@@ -11,6 +11,7 @@ struct OrbTrackingParams {
     int fps = 20;                            // Camera.fps
     double th_depth = 60.0;                  // Stereo.ThDepth, in baselines
     bool insert_kfs_when_lost = true;        // IMU.InsertKFsWhenLost
+    double th_far_points = 0.0;              // System.thFarPoints, m (0: off)
 };
 FW_PARAMS(OrbTrackingParams,
     GROUP("tracking", PERSIST(ask),
@@ -21,4 +22,6 @@ FW_PARAMS(OrbTrackingParams,
           FIELD(th_depth, DEFAULT(60.0), RANGE(1.0, 1000.0),
                 DESC("close / far stereo points at this many baselines (Stereo.ThDepth)")),
           FIELD(insert_kfs_when_lost, DEFAULT(true),
-                DESC("stereo_inertial: keep inserting keyframes while RECENTLY_LOST (IMU.InsertKFsWhenLost)"))))
+                DESC("stereo_inertial: keep inserting keyframes while RECENTLY_LOST (IMU.InsertKFsWhenLost)")),
+          FIELD(th_far_points, DEFAULT(0.0), RANGE(0.0, 10000.0),
+                DESC("map points farther than this (m) are not triangulated nor tracked (System.thFarPoints; 0: off)"))))

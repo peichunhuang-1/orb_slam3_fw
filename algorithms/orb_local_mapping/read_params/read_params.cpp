@@ -1,4 +1,4 @@
-// read_params: mbInertial from params.sensor, to the key `inertial` (the tree's branches) and the local mapper (the
+// read_params: mbInertial from params.sensor (and System.thFarPoints to the mapper), to the key `inertial` (the tree's branches) and the local mapper (the
 // leaves).
 #include "fw/fw.hpp"
 #include "params/orb_tracking_params.hpp"
@@ -10,6 +10,8 @@ fw::bt::Status read_params(const OrbTrackingParams& params, fw::Write<local_mapp
                            bool& inertial) {
     inertial = params.sensor == "stereo_inertial";
     mapper->inertial = inertial;
+    mapper->far_points = params.th_far_points > 0;  // mbFarPoints, mThFarPoints
+    mapper->th_far_points = float(params.th_far_points);
     return fw::bt::Status::SUCCESS;
 }
 

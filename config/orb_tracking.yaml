@@ -3,3 +3,4 @@ sensor: stereo_inertial   # stereo | stereo_inertial
 fps: 20
 th_depth: 60.0            # baselines
 insert_kfs_when_lost: true
+th_far_points: 20.0       # m (System.thFarPoints, as TUM-VI_far.yaml); 0: off
