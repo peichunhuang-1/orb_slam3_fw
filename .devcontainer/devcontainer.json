@@ -1,12 +1,15 @@
 {
   "name": "orb_slam3_fw",
-  // Same container on a Raspberry Pi 5 and on macOS (Docker Desktop, Apple Silicon); compose.yaml + detect_gpu.sh
-  // pass /dev/dri in only where the host has it.
+  // Same container on a Raspberry Pi 5, an NXP i.MX95 and macOS (Docker Desktop, Apple Silicon); compose.yaml +
+  // detect_gpu.sh pass the GPU in only where the host has one (/dev/dri on the Pi, /dev/mali0 + libmali on NXP).
   "initializeCommand": "sh .devcontainer/detect_gpu.sh",
   "dockerComposeFile": "compose.yaml",
   "service": "dev",
   "workspaceFolder": "/workspaces/orb_slam3_fw",
   "remoteUser": "fw",
+  // The host user is root, so the CLI would add an updateUID build; its RUN uses the bridge network,
+  // which fails on the i.MX95 (no iptables raw table). UID 0 maps to root anyway, so skip it.
+  "updateRemoteUserUID": false,
   "postStartCommand": "bash .devcontainer/gpu_access.sh",
   "customizations": {
     "vscode": {

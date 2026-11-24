@@ -1,15 +1,25 @@
 # The dev container, as compose so that the GPU device can depend on the host: devcontainer.json's
-# initializeCommand (detect_gpu.sh) writes .devcontainer/.env with FW_GPU_DEVICE before this starts.
-#   Pi 5 : FW_GPU_DEVICE=/dev/dri                  (VideoCore VII render node, gpu_access.sh opens it up)
-#   macOS: FW_GPU_DEVICE=/dev/null:/dev/fw-no-gpu  (placeholder, no /dev/dri in Docker Desktop's VM)
+# initializeCommand (detect_gpu.sh) writes .devcontainer/.env before this starts.
+#   NXP i.MX95: FW_GPU=mali, /dev/mali0 + /dev/dma_heap + /dev/dri, the host's libmali mounted at /opt/host-mali
+#   Pi 5      : FW_GPU=v3dv, FW_GPU_DEVICE=/dev/dri (VideoCore VII render node, gpu_access.sh opens it up)
+#   macOS     : placeholders (/dev/null:/dev/fw-no-*), no /dev/dri in Docker Desktop's VM
 services:
   dev:
     build:
       context: .
       dockerfile: Dockerfile
+      # Without buildx, Docker's legacy builder runs each step on the bridge network, which fails on the
+      # NXP BSP kernel (no iptables "raw" table); host networking works everywhere.
+      network: host
+      args:
+        FW_GPU: ${FW_GPU:-v3dv}
     command: sleep infinity
     volumes:
       - ..:/workspaces/orb_slam3_fw:cached
+      # NXP: the BSP's Mali user-space driver (must match the host kernel's mali_kbase); elsewhere an empty dir
+      - ${FW_HOST_MALI_DIR:-./no-host-gpu}:/opt/host-mali:ro
+    environment:
+      VK_ICD_FILENAMES: ${FW_VK_ICD_FILENAMES:-/opt/mesa-v3dv/share/vulkan/icd.d/broadcom_icd.aarch64.json:/usr/share/vulkan/icd.d/lvp_icd.aarch64.json}
     # Docker Desktop: host networking is the VM's unless enabled in Settings > Resources > Network
     network_mode: host
     ipc: host
@@ -20,5 +30,7 @@ services:
     ulimits:
       rtprio: 99
     devices:
-      # Add this robot's devices here, for example /dev/ttyUSB0 (Pi only: a missing device fails the start)
+      # Add this robot's devices here, for example /dev/ttyUSB0 (Linux hosts only: a missing device fails the start)
       - ${FW_GPU_DEVICE:-/dev/null:/dev/fw-no-gpu}
+      - ${FW_MALI_DEVICE:-/dev/null:/dev/fw-no-mali}
+      - ${FW_DMA_HEAP_DEVICE:-/dev/null:/dev/fw-no-dma-heap}
