@@ -235,6 +235,9 @@ struct Problem::Impl {
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Upper, Eigen::AMDOrdering<int>> ldlt;
     bool analyzed = false;
     std::vector<double> backup;
+    // ebuf holds the active residuals' errors at the current parameters: set by computeActiveErrors, cleared by
+    // pop (ebuf then holds the rejected trial's). step() skips its first computeActiveErrors while it is set.
+    bool errors_current = false;
 
     double chi2(const Res& R) const {
         const Eigen::Map<const Eigen::VectorXd> e(ebuf.data() + R.e_off, R.rows);
@@ -441,6 +444,7 @@ struct Problem::Impl {
 
     void computeActiveErrors() {
         for (int r : active) computeError(res[std::size_t(r)]);
+        errors_current = true;
     }
 
     double activeRobustCost() const {
@@ -597,6 +601,7 @@ struct Problem::Impl {
             std::copy_n(backup.data() + k, B.ambient, B.x);
             k += std::size_t(B.ambient);
         }
+        errors_current = false;
     }
     void update() {
         double tmp[64];
@@ -705,8 +710,15 @@ void Problem::step() {
     Impl& m = *impl_;
     Run& R = *run_;
     const Options& o = R.o;
-    m.computeActiveErrors();
-    double current = m.activeRobustCost();
+    // The parameters are those of start() or of the last accepted trial, whose errors and cost are at hand; a
+    // step that ended without accepting (a NaN ρ) left the rejected trial's errors in ebuf.
+    double current;
+    if (m.errors_current) {
+        current = R.s.final_cost;
+    } else {
+        m.computeActiveErrors();
+        current = m.activeRobustCost();
+    }
     const double initial = current;
     m.buildSystem();
     if (R.it == 0) {
