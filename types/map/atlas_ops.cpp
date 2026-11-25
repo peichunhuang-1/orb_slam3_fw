@@ -249,17 +249,27 @@ void updateBestCovisibles(Atlas& a, KeyFrameId k) {
 void updateConnections(Atlas& a, KeyFrameId k) {
     const KeyFrame* kf = a.keyframe(k);
     if (!kf) return;
-    std::map<KeyFrameId, int> counter;
+    // (keyframe, shared points) by keyframe id, as ORB-SLAM3's map<KeyFrame*, int> (ordered by id here): the ids
+    // of every observation sorted, then counted
+    std::vector<KeyFrameId> seen;
     for (MapPointId pid : kf->points) {
         const MapPoint* p = a.goodPoint(pid);
         if (!p) continue;
         for (const auto& o : p->observations) {
             const KeyFrame* other = a.goodKeyFrame(o.first);
             if (o.first == k || !other || other->map != kf->map) continue;
-            ++counter[o.first];
+            seen.push_back(o.first);
         }
     }
-    if (counter.empty()) return;
+    if (seen.empty()) return;
+    std::sort(seen.begin(), seen.end());
+    std::vector<std::pair<KeyFrameId, int>> counter;
+    for (std::size_t i = 0; i < seen.size();) {
+        std::size_t j = i + 1;
+        while (j < seen.size() && seen[j] == seen[i]) ++j;
+        counter.emplace_back(seen[i], int(j - i));
+        i = j;
+    }
 
     constexpr int th = 15;
     int nmax = 0;
@@ -575,13 +585,17 @@ void computeDistinctiveDescriptors(Atlas& a, MapPointId pid) {
     std::vector<int> row(n);
     for (std::size_t i = 0; i < n; ++i) {
         std::copy(dist.begin() + long(i * n), dist.begin() + long((i + 1) * n), row.begin());
-        std::sort(row.begin(), row.end());
-        const int median = row[std::size_t(0.5 * double(n - 1))];
+        // the median only: nth_element puts at its position what sorting the row would
+        const std::size_t mid = std::size_t(0.5 * double(n - 1));
+        std::nth_element(row.begin(), row.begin() + long(mid), row.end());
+        const int median = row[mid];
         if (median < best_median) {
             best_median = median;
             best = i;
         }
     }
+    // unchanged: no edit (an edit copies the point's tile in the atlas version)
+    if (std::equal(d[best], d[best] + 32, p->descriptor.begin())) return;
     std::copy(d[best], d[best] + 32, a.editPoint(pid)->descriptor.begin());
 }
 
@@ -612,10 +626,15 @@ void updateNormalAndDepth(Atlas& a, MapPointId pid) {
     if (index < 0) return;  // the reference keyframe does not see it (ORB-SLAM3 reads out of bounds)
     const orb::FrameFeatures& ff = *ref->data->features;
     const int level = ff.keypoint(index).octave;
+    const float max_distance = dist * ff.scale_factors[std::size_t(level)];
+    const float min_distance = max_distance / ff.scale_factors[std::size_t(ff.levels - 1)];
+    const Eigen::Vector3f mean_normal = normal / float(n);
+    // unchanged: no edit (an edit copies the point's tile in the atlas version)
+    if (p->max_distance == max_distance && p->min_distance == min_distance && p->normal == mean_normal) return;
     MapPoint* pe = a.editPoint(pid);
-    pe->max_distance = dist * ff.scale_factors[std::size_t(level)];
-    pe->min_distance = pe->max_distance / ff.scale_factors[std::size_t(ff.levels - 1)];
-    pe->normal = normal / float(n);
+    pe->max_distance = max_distance;
+    pe->min_distance = min_distance;
+    pe->normal = mean_normal;
 }
 
 MapPointId createStereoPoint(Atlas& a, KeyFrameId k, int i, const Eigen::Vector3f& pos, MapPointId id) {
