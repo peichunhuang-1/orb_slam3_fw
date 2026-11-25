@@ -1,5 +1,6 @@
 #include "algorithms/orb_tracking/shared/pose_optimizer.hpp"
 
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -77,18 +78,25 @@ struct Edge {
 
 class PoseProblem {
 public:
-    PoseProblem(const camera::StereoRig& rig, const SE3d& Trl, const Huber& huber) : rig_(rig), Trl_(Trl), huber_(huber) {
+    PoseProblem(const camera::StereoRig& rig, const SE3d& Trl, const Huber& huber, const ParallelFor& par)
+        : rig_(rig), Trl_(Trl), huber_(huber), par_(par) {
         Rrl_ = Trl_.unitQuaternion().toRotationMatrix();
     }
 
     std::vector<Edge> edges;
     SE3d estimate;
 
-    void computeError(Edge& e) const {
-        if (!e.right)
-            e.error = e.obs - rig_.camera(0).project_orb(estimate * e.Xw);
-        else
-            e.error = e.obs - rig_.camera(1).project_orb((Trl_ * estimate) * e.Xw);
+    // The KB8 model in double (project_jacobian_d): the error and (J != nullptr) d(u, v) / dXl, Xl the point in the
+    // left camera, from one θ. Returns Xl.
+    Eigen::Vector3d computeError(Edge& e, Eigen::Matrix<double, 2, 3>* J = nullptr) const {
+        const Eigen::Vector3d Xl = estimate * e.Xw;
+        if (!e.right) {
+            e.error = e.obs - rig_.camera(0).project_jacobian_d(Xl, J);
+        } else {
+            e.error = e.obs - rig_.camera(1).project_jacobian_d(Trl_ * Xl, J);
+            if (J) *J = *J * Rrl_;
+        }
+        return Xl;
     }
 
     // g2o's SparseOptimizer::optimize(iterations) with OptimizationAlgorithmLevenberg, on the active edges
@@ -97,12 +105,10 @@ public:
         int n_bad = 0;
         Vector6d x = Vector6d::Zero();
         for (int it = 0; it < iterations; ++it) {
-            computeActiveErrors();
-            double current_chi = activeRobustChi2();
-            const double ini_chi = current_chi;
             Matrix6d H;
             Vector6d b;
-            buildSystem(H, b);
+            double current_chi = buildSystem(H, b);
+            const double ini_chi = current_chi;
             if (it == 0) {
                 double max_diagonal = 0.;
                 for (int j = 0; j < 6; ++j) max_diagonal = std::max(std::fabs(H(j, j)), max_diagonal);
@@ -120,8 +126,7 @@ public:
                 const bool ok = ldlt.isPositive();
                 if (ok) x = ldlt.solve(Eigen::VectorXd(b));
                 estimate = expSE3(x) * estimate;
-                computeActiveErrors();
-                double temp_chi = activeRobustChi2();
+                double temp_chi = activeErrors();
                 if (!ok) temp_chi = std::numeric_limits<double>::max();
                 rho = current_chi - temp_chi;
                 double scale = 0.;
@@ -152,73 +157,97 @@ public:
     }
 
 private:
-    void computeActiveErrors() {
-        for (Edge& e : edges)
-            if (e.active) computeError(e);
+    // An active edge's part of the robust chi2 (rho0)
+    double robustChi2(const Edge& e) const {
+        if (!e.robust) return e.chi2();
+        double rho0, rho1;
+        huber_.robustify(e.chi2(), rho0, rho1);
+        return rho0;
     }
 
-    double activeRobustChi2() const {
-        double chi = 0.0;
-        for (const Edge& e : edges) {
-            if (!e.active) continue;
-            if (e.robust) {
-                double rho0, rho1;
-                huber_.robustify(e.chi2(), rho0, rho1);
-                chi += rho0;
-            } else {
-                chi += e.chi2();
+    // The active edges in kParallelChunks fixed chunks on par_, each chunk's sums added in chunk order (the result
+    // does not depend on the thread count)
+    template <class F>
+    void forChunks(const F& fn) {
+        const int n = int(edges.size());
+        runParallel(par_, 0, kParallelChunks, [&](int c) {
+            for (int k = chunkBegin(n, c); k < chunkBegin(n, c + 1); ++k) {
+                Edge& e = edges[std::size_t(k)];
+                if (e.active) fn(c, e);
             }
+        });
+    }
+
+    // The active edges' errors (EdgeSE3ProjectXYZOnlyPose::computeError); returns their robust chi2
+    double activeErrors() {
+        std::array<double, kParallelChunks> chi{};
+        forChunks([&](int c, Edge& e) {
+            computeError(e);
+            chi[std::size_t(c)] += robustChi2(e);
+        });
+        double sum = 0.0;
+        for (double v : chi) sum += v;
+        return sum;
+    }
+
+    // The active edges' errors and BlockSolver::buildSystem with BaseUnaryEdge::constructQuadraticForm, from one
+    // projection per edge; returns their robust chi2
+    double buildSystem(Matrix6d& H, Vector6d& b) {
+        std::array<Matrix6d, kParallelChunks> Hc;
+        std::array<Vector6d, kParallelChunks> bc;
+        std::array<double, kParallelChunks> chi{};
+        for (int c = 0; c < kParallelChunks; ++c) {
+            Hc[std::size_t(c)].setZero();
+            bc[std::size_t(c)].setZero();
         }
-        return chi;
-    }
-
-    Eigen::Matrix<double, 2, 6> jacobian(const Edge& e) const {
-        const Eigen::Vector3d Xl = estimate * e.Xw;
-        const double x = Xl[0], y = Xl[1], z = Xl[2];
-        Eigen::Matrix<double, 3, 6> d;
-        d << 0.f, z, -y, 1.f, 0.f, 0.f,
-             -z, 0.f, x, 0.f, 1.f, 0.f,
-             y, -x, 0.f, 0.f, 0.f, 1.f;
-        if (!e.right) return -rig_.camera(0).project_jacobian_orb(Xl) * d;
-        const Eigen::Vector3d Xr = Trl_ * Xl;
-        return -rig_.camera(1).project_jacobian_orb(Xr) * Rrl_ * d;
-    }
-
-    // BlockSolver::buildSystem with BaseUnaryEdge::constructQuadraticForm
-    void buildSystem(Matrix6d& H, Vector6d& b) const {
+        forChunks([&](int c, Edge& e) {
+            Eigen::Matrix<double, 2, 3> J;
+            const Eigen::Vector3d Xl = computeError(e, &J);
+            const double x = Xl[0], y = Xl[1], z = Xl[2];
+            Eigen::Matrix<double, 3, 6> d;
+            d << 0., z, -y, 1., 0., 0.,
+                 -z, 0., x, 0., 1., 0.,
+                 y, -x, 0., 0., 0., 1.;
+            const Eigen::Matrix<double, 2, 6> A = -J * d;
+            const Eigen::Matrix2d& omega = e.information;
+            double rho1 = 1.;
+            if (e.robust) {
+                double rho0;
+                huber_.robustify(e.chi2(), rho0, rho1);
+                chi[std::size_t(c)] += rho0;
+            } else {
+                chi[std::size_t(c)] += e.chi2();
+            }
+            bc[std::size_t(c)].noalias() -= rho1 * A.transpose() * omega * e.error;
+            Hc[std::size_t(c)].noalias() += A.transpose() * (rho1 * omega) * A;
+        });
         H.setZero();
         b.setZero();
-        for (const Edge& e : edges) {
-            if (!e.active) continue;
-            const Eigen::Matrix<double, 2, 6> A = jacobian(e);
-            const Eigen::Matrix2d& omega = e.information;
-            if (e.robust) {
-                double rho0, rho1;
-                huber_.robustify(e.chi2(), rho0, rho1);
-                const Eigen::Matrix2d weighted = rho1 * omega;
-                b.noalias() -= rho1 * A.transpose() * omega * e.error;
-                H.noalias() += A.transpose() * weighted * A;
-            } else {
-                b.noalias() -= A.transpose() * omega * e.error;
-                H.noalias() += A.transpose() * omega * A;
-            }
+        double sum = 0.0;
+        for (int c = 0; c < kParallelChunks; ++c) {
+            H += Hc[std::size_t(c)];
+            b += bc[std::size_t(c)];
+            sum += chi[std::size_t(c)];
         }
+        return sum;
     }
 
     const camera::StereoRig& rig_;
     SE3d Trl_;
     Eigen::Matrix3d Rrl_;
     Huber huber_;
+    const ParallelFor& par_;
 };
 
 }  // namespace
 
-int optimizePose(tracking::Frame& frame, const camera::StereoRig& rig, const std::vector<const Eigen::Vector3f*>& world) {
+int optimizePose(tracking::Frame& frame, const camera::StereoRig& rig, const std::vector<const Eigen::Vector3f*>& world,
+                 const ParallelFor& par) {
     const orb::FrameFeatures& features = *frame.features;
     const int N = frame.size();
     const float delta_mono = std::sqrt(5.991);
     const SE3d Trl(frame.Trl.unitQuaternion().cast<double>(), frame.Trl.translation().cast<double>());
-    PoseProblem problem(rig, Trl, Huber(delta_mono));
+    PoseProblem problem(rig, Trl, Huber(delta_mono), par);
     problem.edges.reserve(std::size_t(N));
 
     int n_initial = 0;
@@ -268,11 +297,11 @@ int optimizePose(tracking::Frame& frame, const camera::StereoRig& rig, const std
     return n_initial - n_bad;
 }
 
-int optimizePose(tracking::Frame& frame, const map::Atlas& atlas) {
+int optimizePose(tracking::Frame& frame, const map::Atlas& atlas, const ParallelFor& par) {
     std::vector<const Eigen::Vector3f*> world(std::size_t(frame.size()), nullptr);
     for (std::size_t i = 0; i < world.size(); ++i)
         if (const map::MapPoint* p = atlas.point(frame.points[i])) world[i] = &p->pos;
-    return optimizePose(frame, atlas.rig(frame.rig), world);
+    return optimizePose(frame, atlas.rig(frame.rig), world, par);
 }
 
 }  // namespace orb_tracking
