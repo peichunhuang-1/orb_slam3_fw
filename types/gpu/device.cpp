@@ -9,7 +9,8 @@
 
 namespace gpu {
 
-std::shared_ptr<Context> Device::context() {
+std::shared_ptr<Context> Device::context() const {
+    std::lock_guard<std::mutex> lock(m_);
     if (!tried_) {
         tried_ = true;
 #ifdef ORB_HAVE_VULKAN
@@ -26,13 +27,18 @@ std::shared_ptr<Context> Device::context() {
     return ctx_;
 }
 
-bool Device::available() {
+bool Device::available() const {
     try {
         context();
         return true;
     } catch (const std::exception&) {
         return false;
     }
+}
+
+std::string Device::error() const {
+    std::lock_guard<std::mutex> lock(m_);
+    return error_;
 }
 
 }  // namespace gpu

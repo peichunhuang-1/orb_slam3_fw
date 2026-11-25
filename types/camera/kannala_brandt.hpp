@@ -35,6 +35,11 @@ public:
     Eigen::Vector2d project_orb(const Eigen::Vector3d& p) const;
     Eigen::Vector2f project_orb(const Eigen::Vector3f& p) const;
     Eigen::Matrix<double, 2, 3> project_jacobian_orb(const Eigen::Vector3d& p) const;
+    // The same model all in double, the pixel and (J != nullptr) d(u, v) / d(x, y, z) from one θ: cos ψ, sin ψ as
+    // x / ρ, y / ρ (ρ = √(x² + y²)) instead of atan2 + cos + sin. For the optimizers, which evaluate both for every
+    // edge of every iteration; it differs from project_orb (float θ and ψ) by rounding only. On the optical axis
+    // (ρ = 0) the limit (θ / ρ → 1 / z). No range checks.
+    Eigen::Vector2d project_jacobian_d(const Eigen::Vector3d& p, Eigen::Matrix<double, 2, 3>* J = nullptr) const;
     // ORB-SLAM3's KannalaBrandt8::unproject: the ray at z = 1 (θ by up to 10 Newton steps in float, precision
     // 1e-6, θd clamped to ±π/2)
     Eigen::Vector3f unproject_orb(const Eigen::Vector2f& uv) const;

@@ -1,8 +1,9 @@
 #include "algorithms/orb_tracking/track_local_map/local_map.hpp"
 
-#include <map>
-#include <set>
+#include <algorithm>
+#include <cstdint>
 #include <unordered_set>
+#include <vector>
 
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
 #include "types/orb/hamming.hpp"
@@ -17,16 +18,23 @@ void updateLocalKeyFrames(const map::Atlas& a, tracking::Tracker& t) {
     tracking::Frame& f = t.current;
     // Each point votes for the keyframes observing it (the current frame's points; with the IMU initialized and
     // no recent relocalization the last frame's, as the current one has no matches yet). Bad points leave.
-    std::map<map::KeyFrameId, int> counter;
+    // (counted as a sorted list of votes: the keyframes in increasing id, as a std::map would give them)
+    std::vector<map::KeyFrameId> votes;
     tracking::Frame& voter = (!a.imuInitialized() || f.id < t.last_reloc_frame_id + 2) ? f : t.last;
     for (map::MapPointId& id : voter.points) {
         if (id == map::kNone) continue;
         const map::MapPoint* p = a.point(id);
         if (p && !p->bad) {
-            for (const auto& [k, obs] : p->observations) ++counter[k];
+            for (const auto& [k, obs] : p->observations) votes.push_back(k);
         } else {
             id = map::kNone;
         }
+    }
+    std::sort(votes.begin(), votes.end());
+    std::vector<std::pair<map::KeyFrameId, int>> counter;
+    for (map::KeyFrameId k : votes) {
+        if (counter.empty() || counter.back().first != k) counter.push_back({k, 0});
+        ++counter.back().second;
     }
 
     std::unordered_set<map::KeyFrameId> marked;  // mnTrackReferenceForFrame == this frame
@@ -98,14 +106,16 @@ void updateLocalKeyFrames(const map::Atlas& a, tracking::Tracker& t) {
 
 void updateLocalPoints(const map::Atlas& a, tracking::Tracker& t) {
     t.local_points.clear();
-    std::unordered_set<map::MapPointId> marked;
+    std::vector<std::uint8_t> marked(std::size_t(std::max(a.next_point_id, a.next_tracking_point_id)) + 1, 0);  // by id
     for (auto it = t.local_keyframes.rbegin(); it != t.local_keyframes.rend(); ++it) {
         const map::KeyFrame& kf = *a.keyframe(*it);
         for (map::MapPointId id : kf.points) {
-            if (id == map::kNone || marked.count(id)) continue;
+            if (id == map::kNone) continue;
+            if (std::size_t(id) >= marked.size()) marked.resize(std::size_t(id) + 1, 0);
+            if (marked[std::size_t(id)]) continue;
             if (a.goodPoint(id)) {
                 t.local_points.push_back(id);
-                marked.insert(id);
+                marked[std::size_t(id)] = 1;
             }
         }
     }
@@ -171,22 +181,40 @@ struct Best {
     int dist = 256, level = -1, dist2 = 256, level2 = -1, idx = -1;
 };
 
-Best bestTwo(const tracking::Frame& f, const map::Atlas& a, const std::vector<std::size_t>& cands, int view,
-             const std::uint8_t* d) {
+// A candidate feature of a view (view 1: right index) and its descriptor distance to the point, computed before
+// the matching (in parallel): whether it is still free is checked when the point's turn comes
+struct Candidate {
+    int idx, dist, octave;
+};
+using Candidates = std::vector<Candidate>;
+
+Candidates candidates(const orb::FrameFeatures& ff, const std::vector<std::size_t>& in_area, int view,
+                      const std::uint8_t* d) {
+    const int offset = view == 0 ? 0 : ff.n_left;
+    Candidates out;
+    out.reserve(in_area.size());
+    for (std::size_t c : in_area) {
+        const int i = int(c) + offset;
+        out.push_back({int(c), orb::hamming256(d, ff.descriptor(i)), ff.keypoint(i).octave});
+    }
+    return out;
+}
+
+Best bestTwo(const tracking::Frame& f, const map::Atlas& a, const Candidates& cands, int view) {
     const orb::FrameFeatures& ff = *f.features;
     const int offset = view == 0 ? 0 : ff.n_left;
     Best b;
-    for (std::size_t c : cands) {
-        const int i = int(c) + offset;
+    for (const Candidate& c : cands) {
+        const int i = c.idx + offset;
         if (const map::MapPoint* q = a.point(f.points[std::size_t(i)]); q && q->n_obs > 0) continue;
-        const int dist = orb::hamming256(d, ff.descriptor(i));
-        const int octave = ff.keypoint(i).octave;
+        const int dist = c.dist;
+        const int octave = c.octave;
         if (dist < b.dist) {
             b.dist2 = b.dist;
             b.dist = dist;
             b.level2 = b.level;
             b.level = octave;
-            b.idx = int(c);
+            b.idx = c.idx;
         } else if (dist < b.dist2) {
             b.level2 = octave;
             b.dist2 = dist;
@@ -196,7 +224,10 @@ Best bestTwo(const tracking::Frame& f, const map::Atlas& a, const std::vector<st
 }
 
 // ORBmatcher(0.8)::SearchByProjection(Frame&, vector<MapPoint*>, th, bFarPoints, thFarPoints)
-int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool far_points, float th_far_points) {
+// Phase 1 on par: per local point and view, the features in its search area and their descriptor distances
+// (independent of the matches). Phase 2 in the points' order: the matches, as the original's single loop.
+int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool far_points, float th_far_points,
+                       const ParallelFor& par) {
     constexpr float kRatio = 0.8f;
     tracking::Frame& f = t.current;
     const orb::FrameFeatures& ff = *f.features;
@@ -205,22 +236,52 @@ int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool
     const bool factor = th != 1.0f;
     int nmatches = 0;
 
-    for (map::MapPointId id : t.local_points) {
-        const tracking::PointScratch& s = pointScratch(t, id);
-        if (!s.in_view && !s.in_view_r) continue;
-        if (far_points && s.depth > th_far_points) continue;
+    // the points that are searched: in view, near enough, good
+    auto searched = [&](map::MapPointId id) -> const map::MapPoint* {
+        const tracking::PointScratch& s = t.point_scratch[std::size_t(id)];
+        if (!s.in_view && !s.in_view_r) return nullptr;
+        if (far_points && s.depth > th_far_points) return nullptr;
         const map::MapPoint* p = a.point(id);
-        if (!p || p->bad) continue;
-        const std::uint8_t* d = p->descriptor.data();
+        return p && !p->bad ? p : nullptr;
+    };
+    const int n = int(t.local_points.size());
+    std::vector<Candidates> cands[2];
+    cands[0].resize(std::size_t(n));
+    cands[1].resize(std::size_t(n));
+    runParallel(par, 0, kParallelChunks, [&](int c) {
+        for (int k = chunkBegin(n, c); k < chunkBegin(n, c + 1); ++k) {
+            const map::MapPointId id = t.local_points[std::size_t(k)];
+            const map::MapPoint* p = searched(id);
+            if (!p) continue;
+            const tracking::PointScratch& s = t.point_scratch[std::size_t(id)];
+            const std::uint8_t* d = p->descriptor.data();
+            if (s.in_view) {
+                const int level = s.level;
+                float r = radiusByViewingCos(s.view_cos);
+                if (factor) r *= th;
+                cands[0][std::size_t(k)] = candidates(
+                    ff, ff.inArea(0, s.proj_x, s.proj_y, r * ff.scale_factors[std::size_t(level)], level - 1, level),
+                    0, d);
+            }
+            if (s.in_view_r && s.level_r != -1) {
+                const int level = s.level_r;
+                const float r = radiusByViewingCos(s.view_cos_r);  // no th factor, as the original
+                cands[1][std::size_t(k)] = candidates(
+                    ff, ff.inArea(1, s.proj_xr, s.proj_yr, r * ff.scale_factors[std::size_t(level)], level - 1, level),
+                    1, d);
+            }
+        }
+    });
+
+    for (int k = 0; k < n; ++k) {
+        const map::MapPointId id = t.local_points[std::size_t(k)];
+        if (!searched(id)) continue;
+        const tracking::PointScratch& s = t.point_scratch[std::size_t(id)];
 
         if (s.in_view) {
-            const int level = s.level;
-            float r = radiusByViewingCos(s.view_cos);
-            if (factor) r *= th;
-            const std::vector<std::size_t> cands =
-                ff.inArea(0, s.proj_x, s.proj_y, r * ff.scale_factors[std::size_t(level)], level - 1, level);
-            if (!cands.empty()) {
-                const Best b = bestTwo(f, a, cands, 0, d);
+            const Candidates& cl = cands[0][std::size_t(k)];
+            if (!cl.empty()) {
+                const Best b = bestTwo(f, a, cl, 0);
                 if (b.dist <= kThHigh) {
                     // As the original: a failed ratio test on the same level skips the right view too
                     if (b.level == b.level2 && float(b.dist) > kRatio * float(b.dist2)) continue;
@@ -237,13 +298,10 @@ int searchByProjection(tracking::Tracker& t, const map::Atlas& a, float th, bool
         }
 
         if (s.in_view_r) {
-            const int level = s.level_r;
-            if (level == -1) continue;
-            const float r = radiusByViewingCos(s.view_cos_r);  // no th factor, as the original
-            const std::vector<std::size_t> cands =
-                ff.inArea(1, s.proj_xr, s.proj_yr, r * ff.scale_factors[std::size_t(level)], level - 1, level);
-            if (cands.empty()) continue;
-            const Best b = bestTwo(f, a, cands, 1, d);
+            if (s.level_r == -1) continue;
+            const Candidates& cr = cands[1][std::size_t(k)];
+            if (cr.empty()) continue;
+            const Best b = bestTwo(f, a, cr, 1);
             if (b.dist <= kThHigh) {
                 if (b.level == b.level2 && float(b.dist) > kRatio * float(b.dist2)) continue;
                 if (right_to_left[std::size_t(b.idx)] != -1) {
@@ -265,7 +323,8 @@ void updateLocalMap(const map::Atlas& a, tracking::Tracker& t) {
     updateLocalPoints(a, t);
 }
 
-void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::State state, const tracking::MapperStatus& mapper) {
+void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::State state, const tracking::MapperStatus& mapper,
+                       const ParallelFor& par) {
     tracking::Frame& f = t.current;
     // The frame's points are not searched again
     for (map::MapPointId& id : f.points) {
@@ -282,19 +341,28 @@ void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::Stat
         s.in_view_r = false;
     }
 
-    // The local points in the frustum
+    // The local points in the frustum (the tests on par: each point's scratch is its own; the scratch is sized for
+    // the largest id first)
     const camera::StereoRig& rig = rigOf(a, f);
+    const int n = int(t.local_points.size());
+    if (n > 0) pointScratch(t, *std::max_element(t.local_points.begin(), t.local_points.end()));
+    std::vector<std::uint8_t> visible(std::size_t(n), 0);
+    runParallel(par, 0, kParallelChunks, [&](int c) {
+        for (int k = chunkBegin(n, c); k < chunkBegin(n, c + 1); ++k) {
+            const map::MapPointId id = t.local_points[std::size_t(k)];
+            tracking::PointScratch& s = t.point_scratch[std::size_t(id)];
+            if (s.last_frame_seen == f.id) continue;
+            const map::MapPoint* p = a.point(id);
+            if (!p || p->bad) continue;
+            visible[std::size_t(k)] = isInFrustum(f, rig, *p, 0.5f, s);
+        }
+    });
     int to_match = 0;
-    for (map::MapPointId id : t.local_points) {
-        tracking::PointScratch& s = pointScratch(t, id);
-        if (s.last_frame_seen == f.id) continue;
-        const map::MapPoint* p = a.point(id);
-        if (!p || p->bad) continue;
-        if (isInFrustum(f, rig, *p, 0.5f, s)) {
-            ++t.counts[id].visible;  // IncreaseVisible
+    for (int k = 0; k < n; ++k)
+        if (visible[std::size_t(k)]) {
+            ++t.counts[t.local_points[std::size_t(k)]].visible;  // IncreaseVisible
             ++to_match;
         }
-    }
     if (to_match == 0) return;
 
     int th = 1;
@@ -302,7 +370,7 @@ void searchLocalPoints(const map::Atlas& a, tracking::Tracker& t, tracking::Stat
     else if (t.inertial) th = 10;
     if (f.id < t.last_reloc_frame_id + 2) th = 5;  // relocalized recently: coarser
     if (state == tracking::State::LOST || state == tracking::State::RECENTLY_LOST) th = 15;
-    searchByProjection(t, a, float(th), mapper.far_points, mapper.th_far_points);
+    searchByProjection(t, a, float(th), mapper.far_points, mapper.th_far_points, par);
 }
 
 }  // namespace orb_tracking

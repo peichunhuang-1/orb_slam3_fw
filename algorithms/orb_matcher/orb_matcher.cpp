@@ -8,8 +8,9 @@
 //                 GPU pyramids (orb::Features::gpu_pyramid, the extractor on the GPU) are refined on the
 //                 GPU (gpu/subpixel_vk.hpp: no pixel goes through the CPU), CPU ones on the CPU;
 //                 params subpixel_device chooses (auto, gpu, cpu).
-//   gpu         : gpu::Device (resource, write), the box's GPU (types/gpu/device.hpp), the one the
-//                 extractors' GPU pyramids are on: the sub-pixel shader runs there. Taken on every pair.
+//   gpu         : gpu::Device (resource, read), the box's GPU (types/gpu/device.hpp), the one the
+//                 extractors' GPU pyramids are on: the sub-pixel shader runs there. Taken on every pair; read,
+//                 so the extractor goes on with the next pair meanwhile (the device locks its queue itself).
 //   calib       : calib::StereoImuRig (latest), from euroc_mcap_driver. Each camera as KB8: a KB8
 //                 (equidistant) calibration as is, radtan (plumb_bob) by a KB8 fit (rig_from_calib.hpp).
 //                 Resized to the features' image size when that differs (same aspect ratio).
@@ -153,7 +154,7 @@ struct OrbMatcher {
     }
 
     void on_pair(fw::Context& ctx, const orb::Features& left, const orb::Features& right,
-                 Msg<calib::StereoImuRig> cal, const OrbMatcherParams& params, fw::Write<::gpu::Device> device_res,
+                 Msg<calib::StereoImuRig> cal, const OrbMatcherParams& params, fw::Read<::gpu::Device> device_res,
                  orb::Match& out, orb::StereoFrame& frame) {
         update_calib(ctx, cal, params.max_fit_error_px);
 
@@ -407,7 +408,7 @@ struct OrbMatcher {
 FW_REGISTER_ALGORITHM_CLASS(OrbMatcher,
     INPUTS(("calib", calib::StereoImuRig, latest), ("params", OrbMatcherParams, latest)),
     OUTPUTS(("match", orb::Match), ("stereo", orb::StereoFrame)),
-    RESOURCES(("gpu", gpu::Device, write)),
+    RESOURCES(("gpu", gpu::Device, read)),
     ON_SYNC((("left", orb::Features), ("right", orb::Features)), &OrbMatcher::on_pair, USES("calib", "params", "gpu"),
             EMITS("match", "stereo")),
     ON_EOS(&OrbMatcher::on_eos),

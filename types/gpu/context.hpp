@@ -2,9 +2,11 @@
 // A Vulkan device and the GPU pyramids handed from orb_extractor to orb_matcher without a CPU copy.
 //
 // In a graph the device is the box resource gpu/Device (types/gpu/device.hpp): the blocks that use the GPU
-// take it with write access, so the framework gives one of them the device at a time (Vulkan wants the queue
-// externally synchronized) and the graph shows who shares it. Outside the framework (tests, tools) one
-// thread uses a Context, or the caller serializes the use: nothing here locks.
+// take it with read access, so they run at the same time, and the graph shows who shares it. The one thing
+// Vulkan wants externally synchronized on a shared device is the queue: submit() locks it. Everything else a
+// block submits (command pools, command buffers, descriptor pools, fences) is its own.
+// Locking the whole device per handler (write access) held it through each block's CPU work too: the two
+// extractors and the matcher took turns, and the GPU was idle while one of them sorted keypoints.
 //
 // GPU pyramids: the extractor copies its pyramid on the GPU (vkCmdCopyBuffer, ~0.36 ms for 752x480 on a
 // Pi 5, no CPU) into a buffer from a PyramidPool and passes a reference-counted Pyramid in orb::Features;
@@ -41,8 +43,11 @@ public:
     float timestampPeriod() const { return tsPeriod_; }
     bool timestampsSupported() const { return tsSupported_; }
 
-    // vkQueueSubmit on the device's queue (not locked: see the top of this file).
-    VkResult submit(const VkSubmitInfo& si, VkFence fence) { return vkQueueSubmit(queue_, 1, &si, fence); }
+    // vkQueueSubmit on the device's queue, from any thread (the queue is locked for the call only).
+    VkResult submit(const VkSubmitInfo& si, VkFence fence) {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        return vkQueueSubmit(queue_, 1, &si, fence);
+    }
 
     // Host-mapped storage buffer of the context's memory type (also a transfer source / destination).
     struct Buffer {
@@ -60,6 +65,7 @@ private:
     VkPhysicalDevice phys_ = VK_NULL_HANDLE;
     VkDevice dev_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
+    std::mutex queueMutex_;   // Vulkan: a queue is used by one thread at a time
     uint32_t qfam_ = 0, memType_ = 0;
     std::string name_;
     float tsPeriod_ = 0.f;

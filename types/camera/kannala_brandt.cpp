@@ -140,6 +140,37 @@ Eigen::Matrix<double, 2, 3> KannalaBrandt8::project_jacobian_orb(const Eigen::Ve
     return J;
 }
 
+Eigen::Vector2d KannalaBrandt8::project_jacobian_d(const Eigen::Vector3d& v, Eigen::Matrix<double, 2, 3>* J) const {
+    const double x = v[0], y = v[1], z = v[2];
+    const double rho2 = x * x + y * y;
+    const double rho = std::sqrt(rho2);
+    const double theta = std::atan2(rho, z);
+    const double t2 = theta * theta;
+    // r(θ) = θ (1 + k1 θ² + k2 θ⁴ + k3 θ⁶ + k4 θ⁸) and r'(θ), by Horner in θ²
+    const double poly = 1 + t2 * (k_[0] + t2 * (k_[1] + t2 * (k_[2] + t2 * k_[3])));
+    const double rt = theta * poly;
+    // r / ρ: the scale from (x, y) to the image; → 1 / z on the optical axis
+    const double s = rho > 1e-12 ? rt / rho : 1.0 / z;
+    const Eigen::Vector2d uv(fx_ * s * x + cx_, fy_ * s * y + cy_);
+    if (J) {
+        const double drt = 1 + t2 * (3 * k_[0] + t2 * (5 * k_[1] + t2 * (7 * k_[2] + t2 * 9 * k_[3])));
+        const double n2 = rho2 + z * z;   // |p|²; dθ/dρ = z / |p|², dθ/dz = −ρ / |p|²
+        if (rho > 1e-12) {
+            // u = fx · r(θ) · x / ρ:  ∂/∂x = fx (r' z x² / (ρ² |p|²) + r y² / ρ³), as project_jacobian_orb
+            const double a = drt * z / (rho2 * n2), c = rt / (rho2 * rho);
+            (*J)(0, 0) = fx_ * (a * x * x + c * y * y);
+            (*J)(0, 1) = fx_ * (a - c) * x * y;
+            (*J)(1, 0) = fy_ * (a - c) * x * y;
+            (*J)(1, 1) = fy_ * (a * y * y + c * x * x);
+            (*J)(0, 2) = -fx_ * drt * x / n2;
+            (*J)(1, 2) = -fy_ * drt * y / n2;
+        } else {   // the pinhole limit: r ≈ θ ≈ ρ / z
+            (*J) << fx_ / z, 0, -fx_ * x / (z * z), 0, fy_ / z, -fy_ * y / (z * z);
+        }
+    }
+    return uv;
+}
+
 Eigen::Vector3f KannalaBrandt8::unproject_orb(const Eigen::Vector2f& p2D) const {
     const float p0 = float(fx_), p1 = float(fy_), p2 = float(cx_), p3 = float(cy_);
     const float p4 = float(k_[0]), p5 = float(k_[1]), p6 = float(k_[2]), p7 = float(k_[3]);

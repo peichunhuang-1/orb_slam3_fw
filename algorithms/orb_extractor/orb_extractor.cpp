@@ -5,8 +5,9 @@
 //   image    : fw::Image, mono8 (or any CV_8UC1), bgr8 / rgb8 / bgra8 / rgba8 (converted to gray)
 //   params   : OrbExtractorParams (latest; optional, every field has a default). A change rebuilds
 //              the extractor from the next image on.
-//   gpu      : gpu::Device (resource, write), the box's GPU (types/gpu/device.hpp): shared with the other
-//              GPU blocks (orb_matcher reads the GPU pyramids on it). Taken on every image, also with the
+//   gpu      : gpu::Device (resource, read), the box's GPU (types/gpu/device.hpp): shared with the other
+//              GPU blocks (orb_matcher reads the GPU pyramids on it), which run at the same time (the device
+//              locks its queue for each submission only). Taken on every image, also with the
 //              CPU backend (the port is the same; nothing runs on the GPU then).
 //   features : orb::Features, keypoints in full-resolution coordinates (octave = level) and
 //              N x 32 CV_8U descriptors (cv::ORB bit layout), same stamp as the image; the image size,
@@ -107,11 +108,13 @@ struct OrbExtractor {
     fw::Health health = fw::Health::ok;
     std::string health_msg;
 
+    bool direct_report = true;     // false: OrbStereoExtractor reports both eyes' health as one
+
     void report(fw::Context& ctx, fw::Health h, const std::string& msg) {
         if (h == health && msg == health_msg) return;
         health = h;
         health_msg = msg;
-        ctx.report(h, msg);
+        if (direct_report) ctx.report(h, msg);
     }
 
     void reconfigure(const OrbExtractorParams& p) {
@@ -143,7 +146,7 @@ struct OrbExtractor {
 
 #ifdef ORB_HAVE_VULKAN
     // GPU extraction; false when the CPU has to do this frame (auto after a GPU failure).
-    bool extract_gpu(fw::Context& ctx, const cv::Mat& g, ::gpu::Device& device, orb::Features& out) {
+    bool extract_gpu(fw::Context& ctx, const cv::Mat& g, const ::gpu::Device& device, orb::Features& out) {
         if (gpu_failed) return false;
         try {
             if (!gpu) {
@@ -198,13 +201,19 @@ struct OrbExtractor {
     }
 
     void operator()(fw::Context& ctx, const fw::Image& image, const OrbExtractorParams& params,
-                    fw::Write<::gpu::Device> device, orb::Features& features) {
+                    fw::Read<::gpu::Device> device, orb::Features& features) {
+        extract(ctx, image, params, *device, features);
+    }
+
+    // ctx: only for parallel_for unless direct_report (OrbStereoExtractor runs the eyes inside a parallel_for)
+    void extract(fw::Context& ctx, const fw::Image& image, const OrbExtractorParams& params,
+                 const ::gpu::Device& device, orb::Features& features) {
         features.extract_start_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                         std::chrono::steady_clock::now().time_since_epoch()).count();
         reconfigure(params);
         const cv::Mat& g = to_gray(image, gray);
 #ifdef ORB_HAVE_VULKAN
-        if (backend != "cpu" && extract_gpu(ctx, g, *device, features)) return;
+        if (backend != "cpu" && extract_gpu(ctx, g, device, features)) return;
 #else
         (void)device;
         if (backend == "gpu") {
@@ -216,10 +225,51 @@ struct OrbExtractor {
     }
 };
 
+// Both eyes in one block: the images come in as a sync pair, so a frame is dropped for both eyes or for none
+// (two OrbExtractor blocks with their own queues dropped different frames, and orb_matcher's sync lost the
+// pair). The eyes run at the same time (each has its own GPU objects): one eye's CPU work (gray conversion,
+// keypoint selection, descriptors) overlaps the other's shaders. With the CPU backend the eyes run one after
+// the other, each on the THREADS budget (nested parallel_for).
+struct OrbStereoExtractor {
+    OrbExtractor eye[2];
+    fw::Health health = fw::Health::ok;
+    std::string health_msg;
+
+    OrbStereoExtractor() {
+        eye[0].direct_report = eye[1].direct_report = false;
+    }
+
+    void on_pair(fw::Context& ctx, const fw::Image& left, const fw::Image& right, const OrbExtractorParams& params,
+                 fw::Read<::gpu::Device> device, orb::Features& left_features, orb::Features& right_features) {
+        const ::gpu::Device& dev = *device;
+        const fw::Image* images[2] = {&left, &right};
+        orb::Features* out[2] = {&left_features, &right_features};
+        fw::parallel_for(ctx, 0, 2, [&](std::size_t e) { eye[e].extract(ctx, *images[e], params, dev, *out[e]); }, 1);
+        // the worse eye's health; the left one's message when they are equal
+        const int w = int(eye[1].health) > int(eye[0].health) ? 1 : 0;
+        const fw::Health h = eye[w].health;
+        const std::string msg = (eye[0].health == eye[1].health && eye[0].health_msg == eye[1].health_msg)
+                                    ? eye[0].health_msg
+                                    : std::string(w ? "right: " : "left: ") + eye[w].health_msg;
+        if (h == health && msg == health_msg) return;
+        health = h;
+        health_msg = msg;
+        ctx.report(h, msg);
+    }
+};
+
 }  // namespace
 
 FW_REGISTER_ALGORITHM_CLASS(OrbExtractor,
     INPUTS(("image", fw::Image, trigger), ("params", OrbExtractorParams, latest)),
-    RESOURCES(("gpu", gpu::Device, write)),
+    RESOURCES(("gpu", gpu::Device, read)),
     OUTPUTS(("features", orb::Features)),
-    OPTIONS(THREADS(4)));
+    OPTIONS(THREADS(1)));
+
+FW_REGISTER_ALGORITHM_CLASS(OrbStereoExtractor,
+    INPUTS(("params", OrbExtractorParams, latest)),
+    RESOURCES(("gpu", gpu::Device, read)),
+    OUTPUTS(("left_features", orb::Features), ("right_features", orb::Features)),
+    ON_SYNC((("left", fw::Image), ("right", fw::Image)), &OrbStereoExtractor::on_pair, USES("params", "gpu"),
+            EMITS("left_features", "right_features")),
+    OPTIONS(SYNC_SLOP(1ms), THREADS(2)));   // one thread per eye

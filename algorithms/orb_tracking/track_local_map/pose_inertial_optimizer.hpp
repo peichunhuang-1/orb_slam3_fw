@@ -16,10 +16,15 @@
 // round's last update; the Huber kernel goes after round 3; with fewer than 30 inliers (and !rec_init) points
 // below chi2 18 are taken back. The prior left on the frame is H from the final linearization, symmetrized as
 // written ((H + H) / 2) with eigenvalues below 1e-12 set to 0.
+//
+// par: the observations' errors and Jacobians of each iteration are computed on it (shared/parallel.hpp); their
+// sums go chunk by chunk, so the result does not depend on the number of threads (it differs from a single sum
+// over all edges by rounding only).
 #include <vector>
 
 #include <Eigen/Core>
 
+#include "algorithms/orb_tracking/shared/parallel.hpp"
 #include "types/camera/stereo_rig.hpp"
 #include "types/imu/preintegrated.hpp"
 #include "types/tracking/frame.hpp"
@@ -38,11 +43,13 @@ struct ImuState {
 // pose, velocity, bias, outlier flags and prior; returns the inlier count.
 int optimizePoseInertialLastKeyFrame(tracking::Frame& frame, const ImuState& keyframe, const camera::StereoRig& rig,
                                      const std::vector<const Eigen::Vector3f*>& world,
-                                     const std::vector<float>& track_depth, bool rec_init = false);
+                                     const std::vector<float>& track_depth, bool rec_init = false,
+                                     const ParallelFor& par = {});
 
 // prev must carry its prior (prev.prior), which is reset
 int optimizePoseInertialLastFrame(tracking::Frame& frame, tracking::Frame& prev, const camera::StereoRig& rig,
                                   const std::vector<const Eigen::Vector3f*>& world,
-                                  const std::vector<float>& track_depth, bool rec_init = false);
+                                  const std::vector<float>& track_depth, bool rec_init = false,
+                                  const ParallelFor& par = {});
 
 }  // namespace orb_tracking

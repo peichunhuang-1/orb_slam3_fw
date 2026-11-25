@@ -8,7 +8,11 @@
 // Then the points' found counts, the inliers (matches to points with observations; stereo: outliers leave the
 // frame), and success: at least 50 inliers within mMaxFrames of a relocalization, more than 10 when RECENTLY_LOST,
 // else at least 15 (inertial) or 30 (stereo).
+// The local point search runs on the leaf's THREADS (shared/parallel.hpp). The pose optimizations do not: their
+// edges (a few hundred) are too few per iteration, the threads cost more than they save (measured 2026-11-24).
 #include <vector>
+
+#include "fw/fw.hpp"
 
 #include "algorithms/orb_tracking/shared/pose_optimizer.hpp"
 #include "algorithms/orb_tracking/shared/tracking_ops.hpp"
@@ -49,14 +53,17 @@ void optimize(const map::Atlas& a, tracking::Tracker& t) {
     optimizePose(f, a);
 }
 
-fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::MapperStatus&> mapper,
+fw::bt::Status track_local_map(fw::Context& ctx, const State& state, fw::Optional<const tracking::MapperStatus&> mapper,
                                fw::Write<tracking::Tracker> tracker) {
     tracking::Tracker& t = *tracker;
     const map::Atlas& a = tracker->view;
     tracking::Frame& f = t.current;
+    const ParallelFor par = [&ctx](int begin, int end, const std::function<void(int)>& fn) {
+        fw::parallel_for(ctx, std::size_t(begin), std::size_t(end), [&fn](std::size_t i) { fn(int(i)); }, 1);
+    };
 
     updateLocalMap(a, t);
-    searchLocalPoints(a, t, state, mapperOf(mapper));
+    searchLocalPoints(a, t, state, mapperOf(mapper), par);
     optimize(a, t);
 
     // The points' statistics
@@ -84,4 +91,5 @@ fw::bt::Status track_local_map(const State& state, fw::Optional<const tracking::
 
 FW_REGISTER_BT_ACTION(track_local_map,
                       INPUTS(("state", tracking::State, latest), ("mapper", tracking::MapperStatus, latest)),
-                      RESOURCES(("tracker", tracking::Tracker, write)));
+                      RESOURCES(("tracker", tracking::Tracker, write)),
+                      OPTIONS(THREADS(4)));

@@ -1,5 +1,6 @@
 #include "algorithms/orb_tracking/track_local_map/pose_inertial_optimizer.hpp"
 
+#include <array>
 #include <cmath>
 #include <optional>
 
@@ -102,8 +103,8 @@ struct MonoEdge {
 class Problem {
 public:
     Problem(const camera::StereoRig& rig, Vertex& cur, Vertex& prev, const imu::Preintegrated& inertial,
-            const imu::Preintegrated& walks)
-        : rig_(rig), cur_(cur), prev_(prev), pint_(inertial) {
+            const imu::Preintegrated& walks, const ParallelFor& par)
+        : rig_(rig), cur_(cur), prev_(prev), pint_(inertial), par_(par) {
         dim_ = prev_.offset >= 0 ? 30 : 15;
         JRg_ = pint_.JRg.cast<double>();
         JVg_ = pint_.JVg.cast<double>();
@@ -122,10 +123,12 @@ public:
     std::vector<MonoEdge> mono;
     std::optional<tracking::PoseImuPrior> prior;  // EdgePriorPoseImu on prev (LastFrame)
 
-    void computeError(MonoEdge& e) const {
-        const Vec3 Xc = cur_.pose.Rcw[e.cam] * e.Xw + cur_.pose.tcw[e.cam];
-        e.error = e.obs - rig_.camera(e.cam).project_orb(Xc);
+    Vec3 cameraPoint(const MonoEdge& e) const { return cur_.pose.Rcw[e.cam] * e.Xw + cur_.pose.tcw[e.cam]; }
+    // The KB8 model in double (project_jacobian_d), the error with the Jacobian's θ
+    void computeError(MonoEdge& e, const Vec3& Xc) const {
+        e.error = e.obs - rig_.camera(e.cam).project_jacobian_d(Xc);
     }
+    void computeError(MonoEdge& e) const { computeError(e, cameraPoint(e)); }
     bool depthPositive(const MonoEdge& e) const {
         return (cur_.pose.Rcw[e.cam].row(2) * e.Xw + cur_.pose.tcw[e.cam](2)) > 0.0;
     }
@@ -148,10 +151,16 @@ public:
 
     // Jacobian of a mono edge wrt the current pose (EdgeMonoOnlyPose::linearizeOplus)
     Eigen::Matrix<double, 2, 6> monoJacobian(const MonoEdge& e) const {
+        const Vec3 Xc = cameraPoint(e);
+        Eigen::Matrix<double, 2, 3> proj_jac;
+        rig_.camera(e.cam).project_jacobian_d(Xc, &proj_jac);
+        return monoJacobian(e, Xc, proj_jac);
+    }
+    // Xc: the point in the edge's camera (cameraPoint); proj_jac: d(u, v) / dXc there
+    Eigen::Matrix<double, 2, 6> monoJacobian(const MonoEdge& e, const Vec3& Xc,
+                                             const Eigen::Matrix<double, 2, 3>& proj_jac) const {
         const BodyPose& P = cur_.pose;
-        const Vec3 Xc = P.Rcw[e.cam] * e.Xw + P.tcw[e.cam];
         const Vec3 Xb = P.Rbc[e.cam] * Xc + P.tbc[e.cam];
-        const Eigen::Matrix<double, 2, 3> proj_jac = rig_.camera(e.cam).project_jacobian_orb(Xc);
         Eigen::Matrix<double, 3, 6> d;
         const double x = Xb(0), y = Xb(1), z = Xb(2);
         d << 0.0, z, -y, 1.0, 0.0, 0.0,
@@ -242,9 +251,8 @@ private:
         return b;
     }
 
+    // The mono edges' errors are computed with their Jacobians (accumulateMono)
     void computeActiveErrors() {
-        for (MonoEdge& e : mono)
-            if (e.active) computeError(e);
         e_inertial_ = inertialError();
         e_g_ = cur_.bg - prev_.bg;
         e_a_ = cur_.ba - prev_.ba;
@@ -275,18 +283,47 @@ private:
         }
     }
 
-    void buildSystem(Eigen::MatrixXd& H, Eigen::VectorXd& b) const {
+    // The active mono edges: each one's error (EdgeMonoOnlyPose::computeError) and its part of the system, from
+    // one camera point per edge. On par_ in kParallelChunks fixed chunks, summed in chunk order.
+    void accumulateMono(Eigen::Matrix<double, 6, 6>& Hpp, Eigen::Matrix<double, 6, 1>& bp) {
+        const int n = int(mono.size());
+        std::array<Eigen::Matrix<double, 6, 6>, kParallelChunks> Hc;
+        std::array<Eigen::Matrix<double, 6, 1>, kParallelChunks> bc;
+        const Huber mono_huber(float(std::sqrt(5.991)));
+        runParallel(par_, 0, kParallelChunks, [&](int c) {
+            Eigen::Matrix<double, 6, 6>& Hk = Hc[std::size_t(c)];
+            Eigen::Matrix<double, 6, 1>& bk = bc[std::size_t(c)];
+            Hk.setZero();
+            bk.setZero();
+            for (int k = chunkBegin(n, c); k < chunkBegin(n, c + 1); ++k) {
+                MonoEdge& e = mono[std::size_t(k)];
+                if (!e.active) continue;
+                const Vec3 Xc = cameraPoint(e);
+                Eigen::Matrix<double, 2, 3> proj_jac;
+                e.error = e.obs - rig_.camera(e.cam).project_jacobian_d(Xc, &proj_jac);
+                const Eigen::Matrix<double, 2, 6> A = monoJacobian(e, Xc, proj_jac);
+                const double rho1 = e.robust ? mono_huber.weight(e.chi2()) : 1.;
+                const Eigen::Matrix2d weighted = rho1 * e.information;
+                bk.noalias() -= rho1 * A.transpose() * e.information * e.error;
+                Hk.noalias() += A.transpose() * weighted * A;
+            }
+        });
+        Hpp.setZero();
+        bp.setZero();
+        for (int c = 0; c < kParallelChunks; ++c) {
+            Hpp += Hc[std::size_t(c)];
+            bp += bc[std::size_t(c)];
+        }
+    }
+
+    void buildSystem(Eigen::MatrixXd& H, Eigen::VectorXd& b) {
         H = Eigen::MatrixXd::Zero(dim_, dim_);
         b = Eigen::VectorXd::Zero(dim_);
-        const Huber mono_huber(float(std::sqrt(5.991)));
-        for (const MonoEdge& e : mono) {
-            if (!e.active) continue;
-            const Eigen::Matrix<double, 2, 6> A = monoJacobian(e);
-            const double rho1 = e.robust ? mono_huber.weight(e.chi2()) : 1.;
-            const Eigen::Matrix2d weighted = rho1 * e.information;
-            b.segment<6>(cur_.offset).noalias() -= rho1 * A.transpose() * e.information * e.error;
-            H.block<6, 6>(cur_.offset, cur_.offset).noalias() += A.transpose() * weighted * A;
-        }
+        Eigen::Matrix<double, 6, 6> Hpp;
+        Eigen::Matrix<double, 6, 1> bp;
+        accumulateMono(Hpp, bp);
+        H.block<6, 6>(cur_.offset, cur_.offset) += Hpp;
+        b.segment<6>(cur_.offset) += bp;
         const InertialJacobians J = inertialJacobians();
         add(H, b,
             {{prevCol(0), J.P1}, {prevCol(6), J.V1}, {prevCol(9), J.G1}, {prevCol(12), J.A1},
@@ -326,6 +363,7 @@ private:
     Vertex& cur_;
     Vertex& prev_;
     const imu::Preintegrated& pint_;
+    const ParallelFor& par_;
     int dim_ = 15;
     Mat3 JRg_, JVg_, JPg_, JVa_, JPa_;
     double dt_ = 0;
@@ -446,12 +484,12 @@ Matrix15d marginalizeFirst(const Eigen::Matrix<double, 30, 30>& H) {
 
 int optimizePoseInertialLastKeyFrame(tracking::Frame& frame, const ImuState& keyframe, const camera::StereoRig& rig,
                                      const std::vector<const Eigen::Vector3f*>& world,
-                                     const std::vector<float>& track_depth, bool rec_init) {
+                                     const std::vector<float>& track_depth, bool rec_init, const ParallelFor& par) {
     Vertex cur = frameVertex(frame, 0);
     Vertex kf{BodyPose(keyframe), keyframe.vwb.cast<double>(), keyframe.bias.g.cast<double>(),
               keyframe.bias.a.cast<double>(), -1};
     const imu::Preintegrated& pint = *frame.preintegrated;
-    Problem p(rig, cur, kf, pint, pint);
+    Problem p(rig, cur, kf, pint, pint, par);
     const int n_initial = addObservations(p, frame, world);
 
     const float chi2_mono[4] = {12, 7.5, 5.991, 5.991};
@@ -472,10 +510,10 @@ int optimizePoseInertialLastKeyFrame(tracking::Frame& frame, const ImuState& key
 
 int optimizePoseInertialLastFrame(tracking::Frame& frame, tracking::Frame& prev, const camera::StereoRig& rig,
                                   const std::vector<const Eigen::Vector3f*>& world,
-                                  const std::vector<float>& track_depth, bool rec_init) {
+                                  const std::vector<float>& track_depth, bool rec_init, const ParallelFor& par) {
     Vertex cur = frameVertex(frame, 0);
     Vertex pv = frameVertex(prev, 15);
-    Problem p(rig, cur, pv, *frame.preintegrated_frame, *frame.preintegrated);
+    Problem p(rig, cur, pv, *frame.preintegrated_frame, *frame.preintegrated, par);
     p.prior = prev.prior;  // the original requires it (it dereferences mpcpi)
     const int n_initial = addObservations(p, frame, world);
 

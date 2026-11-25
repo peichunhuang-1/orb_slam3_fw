@@ -8,6 +8,7 @@ mode: job
 use_sim_time: true
 boxes:
   main:
+    workers: 6         # as slam_job.graph.yaml
     tap_record: true   # the trajectory and the ground truth for tools/ate.py (out/runs/<session>/main-*.mcap)
     resources:
       gpu:          { type: gpu/Device }
@@ -18,8 +19,7 @@ boxes:
       euroc_mcap_driver:   { driver: euroc_mcap_driver }
       frame_gate_left:     { algorithm: FrameGate }
       frame_gate_right:    { algorithm: FrameGate }
-      orb_extractor_left:  { algorithm: OrbExtractor }
-      orb_extractor_right: { algorithm: OrbExtractor }
+      orb_extractor:       { algorithm: OrbStereoExtractor, queue: { left: 3, right: 3 } }   # as slam_job.graph.yaml
       orb_matcher:         { algorithm: OrbMatcher }
       imu_preintegration:  { algorithm: ImuPreintegration, on_error: stop_box }   # IMU stalled or a gap: the run is no good
       tracking:            { tree: trees/tracking/tracking.tree.yaml }
@@ -29,19 +29,19 @@ boxes:
       loop_closing:        { algorithm: LoopClosing }      # reads the atlas; its changes go to local mapping
 edges:
   - config://euroc_mcap_driver.yaml -> euroc_mcap_driver.params
-  - config://orb_extractor.yaml -> [orb_extractor_left.params, orb_extractor_right.params]
+  - config://orb_extractor.yaml -> orb_extractor.params
   - config://orb_matcher.yaml -> orb_matcher.params
   - config://orb_tracking.yaml -> [tracking.params, local_mapping.params]
   - config://orb_loop_closing.yaml -> loop_closing.params
   - config://frame_gate.yaml -> [frame_gate_left.params, frame_gate_right.params]
   - euroc_mcap_driver.left -> frame_gate_left.in
   - euroc_mcap_driver.right -> frame_gate_right.in
-  - frame_gate_left.out -> orb_extractor_left.image
-  - frame_gate_right.out -> orb_extractor_right.image
+  - frame_gate_left.out -> orb_extractor.left
+  - frame_gate_right.out -> orb_extractor.right
   - euroc_mcap_driver.calib -> [orb_matcher.calib, imu_preintegration.calib, tracking.calib]
   - euroc_mcap_driver.imu -> imu_preintegration.imu
-  - orb_extractor_left.features -> orb_matcher.left
-  - orb_extractor_right.features -> orb_matcher.right
+  - orb_extractor.left_features -> orb_matcher.left
+  - orb_extractor.right_features -> orb_matcher.right
   - orb_matcher.stereo -> imu_preintegration.frame
   - imu_preintegration.frame_imu -> tracking.frame
   # tracking <-> local mapping
@@ -59,7 +59,7 @@ edges:
   # loop closing (algorithms/orb_loop_closing/docs/DESIGN.md)
   - local_mapping.loop_keyframe -> loop_closing.keyframe
   - loop_closing.result -> local_mapping.loop_result
-  - gpu -> [orb_extractor_left.gpu, orb_extractor_right.gpu, orb_matcher.gpu]
+  - gpu -> [orb_extractor.gpu, orb_matcher.gpu]
   - atlas -> [tracking.atlas, local_mapping.atlas, loop_closing.atlas]
   - tracker -> tracking.tracker
   - local_mapper -> local_mapping.local_mapper
