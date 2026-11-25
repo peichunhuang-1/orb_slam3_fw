@@ -4,6 +4,9 @@
 #include <cmath>
 #include <memory>
 #include <utility>
+#include <vector>
+
+#include <Eigen/Geometry>
 
 #include "algorithms/ba_solver/inertial_residuals.hpp"
 #include "libs/nls/problem.hpp"
@@ -22,6 +25,39 @@ imu::Bias biasOf(const Eigen::Vector3d& g, const Eigen::Vector3d& a) {
     b.g = g.cast<float>();
     b.a = a.cast<float>();
     return b;
+}
+
+// The gauge of an inertial problem with nothing fixed (FullInertialBA, bFixLocal = false): the world's position
+// and its yaw about gravity (z) are unobservable, so LM's steps along them follow rounding, not the measurements
+// (seen: a loop's global BA lifted a whole room4 map by 0.31 m and turned it 1.6°, jumping the online trajectory).
+// The 4-dof motion (yaw about z, translation) that best takes the solution's keyframe centers back onto the
+// input's, least squares: applied to the solution, it leaves every residual as it was.
+struct Gauge {
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d t = Eigen::Vector3d::Zero();
+};
+
+Gauge gaugeBack(const std::vector<Eigen::Vector3d>& before, const std::vector<Eigen::Vector3d>& after) {
+    Gauge g;
+    const std::size_t n = before.size();
+    if (n == 0) return g;
+    Eigen::Vector3d mb = Eigen::Vector3d::Zero(), ma = Eigen::Vector3d::Zero();
+    for (std::size_t i = 0; i < n; ++i) {
+        mb += before[i];
+        ma += after[i];
+    }
+    mb /= double(n);
+    ma /= double(n);
+    double sdot = 0, scross = 0;  // the 2-d Umeyama rotation in the horizontal plane
+    for (std::size_t i = 0; i < n; ++i) {
+        const Eigen::Vector3d a = after[i] - ma, b = before[i] - mb;
+        sdot += a.x() * b.x() + a.y() * b.y();
+        scross += a.x() * b.y() - a.y() * b.x();
+    }
+    const double yaw = n > 1 ? std::atan2(scross, sdot) : 0.0;
+    g.R = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    g.t = mb - g.R * ma;
+    return g;
 }
 
 }  // namespace
@@ -195,20 +231,29 @@ public:
         r.seq = p.seq;
         r.kind = p.kind;
         r.iterations = iterations();
+        std::vector<geometry::SE3d> Tcw(p.keyframes.size());
+        std::vector<Eigen::Vector3d> before(p.keyframes.size()), after(p.keyframes.size());
+        for (std::size_t i = 0; i < p.keyframes.size(); ++i) {
+            Tcw[i] = cameraPoseOf(poses_[i].data(), p.keyframes[i].T_cb).cast<double>();
+            before[i] = p.keyframes[i].Tcw.inverse().translation().cast<double>();
+            after[i] = Tcw[i].inverse().translation();
+        }
+        const Gauge g = gaugeBack(before, after);  // world_in <- world_solved
+        const geometry::SE3d A_inv = geometry::SE3d(Eigen::Quaterniond(g.R), g.t).inverse();
         for (std::size_t i = 0; i < p.keyframes.size(); ++i) {
             const ba::KeyFrameState& in = p.keyframes[i];
             ba::KeyFrameState k;
             k.id = in.id;
-            k.Tcw = cameraPoseOf(poses_[i].data(), in.T_cb);
+            k.Tcw = (Tcw[i] * A_inv).cast<float>();
             k.inertial = in.inertial;
             if (in.inertial) {
-                k.velocity = vel_[i].cast<float>();
+                k.velocity = (g.R * vel_[i]).cast<float>();
                 k.bias = p.shared_bias ? biasOf(bg_, ba_) : biasOf(bgs_[i], bas_[i]);
             }
             r.keyframes.push_back(std::move(k));
         }
         for (std::size_t i = 0; i < p.points.size(); ++i)
-            if (pt_b_[i] >= 0) r.points.push_back({p.points[i].id, points_[i].cast<float>(), false});
+            if (pt_b_[i] >= 0) r.points.push_back({p.points[i].id, (g.R * points_[i] + g.t).cast<float>(), false});
         r.ok = true;
         return r;
     }
