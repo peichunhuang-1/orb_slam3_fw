@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "nodes": {
+    "atlas": {
+      "x": 1060,
+      "y": 420
+    },
+    "ba_solver": {
+      "x": 1885,
+      "y": 593
+    },
+    "config://euroc_mcap_driver.yaml": {
+      "x": 0,
+      "y": 136
+    },
+    "config://orb_extractor.yaml": {
+      "x": 29,
+      "y": 242
+    },
+    "config://orb_loop_closing.yaml": {
+      "x": 8,
+      "y": 0
+    },
+    "config://orb_matcher.yaml": {
+      "x": 44,
+      "y": 68
+    },
+    "config://orb_tracking.yaml": {
+      "x": 36,
+      "y": 520
+    },
+    "euroc_mcap_driver": {
+      "x": 371,
+      "y": 93
+    },
+    "gba_solver": {
+      "x": 1885,
+      "y": 461
+    },
+    "gpu": {
+      "x": 371,
+      "y": 323
+    },
+    "imu_preintegration": {
+      "x": 1060,
+      "y": 181
+    },
+    "local_mapper": {
+      "x": 1335,
+      "y": 625
+    },
+    "local_mapping": {
+      "x": 1567,
+      "y": 395
+    },
+    "loop_closing": {
+      "x": 1885,
+      "y": 202
+    },
+    "orb_extractor": {
+      "x": 603,
+      "y": 203
+    },
+    "orb_matcher": {
+      "x": 848,
+      "y": 203
+    },
+    "orb_vocabulary://ORBvoc.bin": {
+      "x": 29,
+      "y": 588
+    },
+    "tracker": {
+      "x": 1060,
+      "y": 505
+    },
+    "tracking": {
+      "x": 1312,
+      "y": 341
+    }
+  },
+  "edges": {
+    "atlas -> local_mapping.atlas": [[1245,441],[1252,441],[1252,614],[1557,614],[1557,624],[1564,624]],
+    "atlas -> loop_closing.atlas": [[1245,441],[1252,441],[1252,299],[1882,299]],
+    "atlas -> tracking.atlas": [[1245,441],[1252,441],[1252,504],[1309,504]],
+    "ba_solver.result -> local_mapping.ba_result": [[2070,646],[2077,646],[2077,321],[1547,321],[1547,492],[1564,492]],
+    "config://euroc_mcap_driver.yaml -> euroc_mcap_driver.params": [[249,150],[266,150],[266,146],[336,146],[368,146]],
+    "config://orb_extractor.yaml -> orb_extractor.params": [[249,256],[600,256]],
+    "config://orb_loop_closing.yaml -> loop_closing.params": [[250,14],[266,14],[266,38],[1855,38],[1855,255],[1882,255]],
+    "config://orb_matcher.yaml -> orb_matcher.params": [[250,82],[828,82],[828,278],[845,278]],
+    "config://orb_tracking.yaml -> local_mapping.params": [[249,534],[266,534],[266,580],[336,580],[1564,580]],
+    "config://orb_tracking.yaml -> tracking.params": [[249,534],[266,534],[266,398],[336,398],[1272,398],[1272,438],[1309,438]],
+    "euroc_mcap_driver.calib -> imu_preintegration.calib": [[556,234],[573,234],[573,49],[1050,49],[1050,234],[1057,234]],
+    "euroc_mcap_driver.calib -> orb_matcher.calib": [[556,234],[573,234],[573,71],[838,71],[838,256],[845,256]],
+    "euroc_mcap_driver.calib -> tracking.calib": [[556,234],[573,234],[573,387],[1282,387],[1282,416],[1309,416]],
+    "euroc_mcap_driver.imu -> imu_preintegration.imu": [[556,190],[563,190],[563,60],[1040,60],[1040,256],[1057,256]],
+    "euroc_mcap_driver.left -> orb_extractor.left": [[556,146],[593,146],[593,278],[600,278]],
+    "euroc_mcap_driver.right -> orb_extractor.right": [[556,168],[583,168],[583,300],[600,300]],
+    "gba_solver.result -> local_mapping.gba_result": [[2070,514],[2097,514],[2097,28],[1537,28],[1537,536],[1564,536]],
+    "gpu -> orb_extractor.gpu": [[556,344],[583,344],[583,322],[600,322]],
+    "gpu -> orb_matcher.gpu": [[556,344],[845,344]],
+    "imu_preintegration.frame_imu -> tracking.frame": [[1245,234],[1302,234],[1302,394],[1309,394]],
+    "local_mapper -> local_mapping.local_mapper": [[1520,646],[1564,646]],
+    "local_mapping.ba_problem -> ba_solver.problem": [[1848,470],[1875,470],[1875,646],[1882,646]],
+    "local_mapping.gba_continue -> gba_solver.continue": [[1848,536],[1882,536]],
+    "local_mapping.gba_problem -> gba_solver.problem": [[1848,514],[1882,514]],
+    "local_mapping.loop_keyframe -> loop_closing.keyframe": [[1848,492],[1865,492],[1865,277],[1882,277]],
+    "local_mapping.mapper -> tracking.mapper": [[1848,448],[1855,448],[1855,331],[1292,331],[1292,460],[1309,460]],
+    "loop_closing.result -> local_mapping.loop_result": [[2070,255],[2087,255],[2087,668],[1547,668],[1547,514],[1564,514]],
+    "orb_extractor.left_features -> orb_matcher.left": [[801,256],[818,256],[818,300],[845,300]],
+    "orb_extractor.right_features -> orb_matcher.right": [[801,278],[808,278],[808,322],[845,322]],
+    "orb_matcher.stereo -> imu_preintegration.frame": [[1033,278],[1057,278]],
+    "orb_vocabulary://ORBvoc.bin -> local_mapping.vocabulary": [[249,602],[336,602],[1564,602]],
+    "orb_vocabulary://ORBvoc.bin -> tracking.vocabulary": [[249,602],[276,602],[276,409],[336,409],[1262,409],[1262,482],[1309,482]],
+    "tracker -> tracking.tracker": [[1245,526],[1309,526]],
+    "tracking.atlas_edits -> local_mapping.atlas_edits": [[1520,460],[1557,460],[1557,448],[1564,448]],
+    "tracking.mapper_cmd -> local_mapping.mapper_cmd": [[1520,482],[1557,482],[1557,470],[1564,470]],
+    "tracking.tracking -> local_mapping.tracking": [[1520,438],[1527,438],[1527,558],[1564,558]]
+  }
+}
