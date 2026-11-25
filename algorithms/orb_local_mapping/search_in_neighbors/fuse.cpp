@@ -12,6 +12,12 @@ constexpr int kThLow = 50;  // ORBmatcher::TH_LOW
 }  // namespace
 
 int fuse(map::Atlas& a, map::KeyFrameId kf_id, const std::vector<map::MapPointId>& points, float th) {
+    FuseProjections proj;
+    return fuse(a, kf_id, points, th, proj);
+}
+
+int fuse(map::Atlas& a, map::KeyFrameId kf_id, const std::vector<map::MapPointId>& points, float th,
+         FuseProjections& proj) {
     const map::KeyFrame* kf = a.keyframe(kf_id);
     if (!kf) return 0;
     const std::shared_ptr<const map::KeyFrameData> data = kf->data;
@@ -20,25 +26,39 @@ int fuse(map::Atlas& a, map::KeyFrameId kf_id, const std::vector<map::MapPointId
     const geometry::SE3f Tcw = kf->pose();
     const Eigen::Vector3f Ow = kf->cameraCenter();
 
+    if (proj.state.size() != points.size()) {
+        proj.state.assign(points.size(), 0);
+        proj.uv.resize(points.size());
+        proj.level.resize(points.size());
+    }
     int fused = 0;
-    for (map::MapPointId pid : points) {
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const map::MapPointId pid = points[i];
         if (pid == map::kNone) continue;
         const map::MapPoint* p = a.point(pid);
         if (!p || p->bad || p->inKeyFrame(kf_id)) continue;
 
-        const Eigen::Vector3f Pw = p->pos;
-        const Eigen::Vector3f Pc = Tcw * Pw;
-        if (Pc(2) < 0.0f) continue;  // depth must be positive
-        const Eigen::Vector2f uv = cam.project_orb(Pc);
-        if (!f.inImage(uv(0), uv(1))) continue;
+        if (proj.state[i] == 0) {
+            proj.state[i] = -1;
+            const Eigen::Vector3f Pw = p->pos;
+            const Eigen::Vector3f Pc = Tcw * Pw;
+            if (Pc(2) < 0.0f) continue;  // depth must be positive
+            const Eigen::Vector2f uv = cam.project_orb(Pc);
+            if (!f.inImage(uv(0), uv(1))) continue;
 
-        // Depth inside the scale pyramid, viewing angle under 60°
-        const Eigen::Vector3f PO = Pw - Ow;
-        const float dist3D = PO.norm();
-        if (dist3D < p->minDistanceInvariance() || dist3D > p->maxDistanceInvariance()) continue;
-        if (PO.dot(p->normal) < 0.5 * dist3D) continue;
+            // Depth inside the scale pyramid, viewing angle under 60°
+            const Eigen::Vector3f PO = Pw - Ow;
+            const float dist3D = PO.norm();
+            if (dist3D < p->minDistanceInvariance() || dist3D > p->maxDistanceInvariance()) continue;
+            if (PO.dot(p->normal) < 0.5 * dist3D) continue;
 
-        const int level = p->predictScale(dist3D, f.log_scale_factor, f.levels);
+            proj.state[i] = 1;
+            proj.uv[i] = uv;
+            proj.level[i] = p->predictScale(dist3D, f.log_scale_factor, f.levels);
+        }
+        if (proj.state[i] < 0) continue;
+        const Eigen::Vector2f uv = proj.uv[i];
+        const int level = proj.level[i];
         const float radius = th * f.scale_factors[std::size_t(level)];
         const std::vector<std::size_t> near = f.inArea(0, uv(0), uv(1), radius);
         if (near.empty()) continue;
@@ -121,9 +141,11 @@ void searchInNeighbors(map::Atlas& a, const local_mapping::LocalMapper& m) {
     // The current keyframe's points into the targets
     // The second call is ORB-SLAM3's Fuse(pKF, points, true), meant for the right camera: th = 1 (fuse.hpp)
     const std::vector<map::MapPointId> matches = a.keyframe(cur_id)->points;
+    FuseProjections proj;
     for (map::KeyFrameId t : targets) {
-        fuse(a, t, matches, 3.0f);
-        fuse(a, t, matches, 1.0f);
+        proj.state.clear();
+        fuse(a, t, matches, 3.0f, proj);
+        fuse(a, t, matches, 1.0f, proj);
     }
     if (m.abort_ba) return;
 
@@ -137,8 +159,9 @@ void searchInNeighbors(map::Atlas& a, const local_mapping::LocalMapper& m) {
             if (!p || p->bad || !seen.insert(pid).second) continue;
             candidates.push_back(pid);
         }
-    fuse(a, cur_id, candidates, 3.0f);
-    fuse(a, cur_id, candidates, 1.0f);
+    proj.state.clear();
+    fuse(a, cur_id, candidates, 3.0f, proj);
+    fuse(a, cur_id, candidates, 1.0f, proj);
 
     // Update the points and the covisibility
     const std::vector<map::MapPointId> after = a.keyframe(cur_id)->points;

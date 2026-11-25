@@ -12,6 +12,8 @@
 // mnFuseCandidateForKF); here they are sets of the call, the same since a keyframe is current once.
 #include <vector>
 
+#include <Eigen/Core>
+
 #include "types/local_mapping/local_mapper.hpp"
 #include "types/map/atlas.hpp"
 
@@ -23,6 +25,19 @@ namespace orb_local_mapping {
 // the χ² 5.99 error, gets it: the feature's point is replaced by the one with more observations, or the point is
 // added there. Returns how many points were matched.
 int fuse(map::Atlas& a, map::KeyFrameId kf, const std::vector<map::MapPointId>& points, float th);
+
+// What fuse computes of points[i] from the keyframe's pose and the point's position, normal and distances
+// before the radius (th): whether it passes the depth, image, distance and angle checks, its pixel and its
+// predicted level. None of those change between searchInNeighbors' th 3 and th 1 calls of the same keyframe and
+// list (fusing only moves observations, descriptors and bad flags), so the second call takes the first's.
+struct FuseProjections {
+    std::vector<signed char> state;  // per point: 0 not computed yet, 1 passes, -1 does not
+    std::vector<Eigen::Vector2f> uv;
+    std::vector<int> level;
+};
+// fuse keeping the projections in proj (empty or from a call with the same keyframe and points)
+int fuse(map::Atlas& a, map::KeyFrameId kf, const std::vector<map::MapPointId>& points, float th,
+         FuseProjections& proj);
 
 // The keyframes SearchInNeighbors fuses with, in order: the 10 best covisibles, then the 20 best covisibles of
 // each of those (not the current keyframe; stops after the first whose turn sees abort_ba), then when inertial
