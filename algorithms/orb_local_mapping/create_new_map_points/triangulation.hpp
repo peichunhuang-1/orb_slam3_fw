@@ -16,20 +16,48 @@
 #include <opencv2/core/types.hpp>
 
 #include "types/camera/kannala_brandt.hpp"
+#include "types/camera/stereo_rig.hpp"
 #include "types/local_mapping/local_mapper.hpp"
 #include "types/map/atlas.hpp"
+#include "types/orb/frame_features.hpp"
 
 namespace orb_local_mapping {
+
+// A keyframe's z = 1 rays (unproject_orb of each keypoint by its eye's camera), each computed when first asked
+// for. ORB-SLAM3 unprojects a feature again for every candidate pair and again when triangulating it; the ray
+// only depends on the keypoint and the camera, so createNewMapPoints keeps the current keyframe's across the
+// neighbours and each neighbour's across its search and its pairs (the same values).
+class Bearings {
+public:
+    Bearings(const orb::FrameFeatures& f, const camera::StereoRig& rig)
+        : f_(&f), rig_(&rig), ray_(std::size_t(f.size())), done_(std::size_t(f.size()), false) {}
+    const Eigen::Vector3f& operator[](int i) {
+        if (!done_[std::size_t(i)]) {
+            const cv::KeyPoint& kp = f_->keypoint(i);
+            ray_[std::size_t(i)] = rig_->camera(f_->isRight(i) ? 1 : 0).unproject_orb(Eigen::Vector2f(kp.pt.x, kp.pt.y));
+            done_[std::size_t(i)] = true;
+        }
+        return ray_[std::size_t(i)];
+    }
+
+private:
+    const orb::FrameFeatures* f_;
+    const camera::StereoRig* rig_;
+    std::vector<Eigen::Vector3f> ray_;
+    std::vector<bool> done_;
+};
 
 // GeometricTools::Triangulate / KannalaBrandt8::Triangulate: the DLT of two z = 1 rays under the 3x4 poses.
 // false when the homogeneous w is 0 (x3D then left unchanged)
 bool triangulateDlt(const Eigen::Vector3f& x_c1, const Eigen::Vector3f& x_c2, const Eigen::Matrix<float, 3, 4>& Tc1w,
                     const Eigen::Matrix<float, 3, 4>& Tc2w, Eigen::Vector3f& x3D);
 
-// KannalaBrandt8::TriangulateMatches: kp1 in cam1, kp2 in cam2, R12 / t12 camera 2 in camera 1, sigma1 / sigma2
-// the levels' σ². The depth in camera 1 (> 0) or a negative code: -1 low parallax, -2 / -3 behind camera 1 / 2,
-// -4 / -5 reprojection error in camera 1 / 2. epipolarConstrain is "> 0.0001".
+// KannalaBrandt8::TriangulateMatches: kp1 in cam1, kp2 in cam2 (r1, r2 their rays: cam.unproject_orb of the
+// keypoint), R12 / t12 camera 2 in camera 1, sigma1 / sigma2 the levels' σ². The depth in camera 1 (> 0) or a
+// negative code: -1 low parallax, -2 / -3 behind camera 1 / 2, -4 / -5 reprojection error in camera 1 / 2.
+// epipolarConstrain is "> 0.0001".
 float triangulateMatches(const camera::KannalaBrandt8& cam1, const camera::KannalaBrandt8& cam2,
+                         const Eigen::Vector3f& r1, const Eigen::Vector3f& r2,
                          const cv::KeyPoint& kp1, const cv::KeyPoint& kp2, const Eigen::Matrix3f& R12,
                          const Eigen::Vector3f& t12, float sigma1, float sigma2, Eigen::Vector3f& p3D);
 
@@ -38,6 +66,9 @@ float triangulateMatches(const camera::KannalaBrandt8& cam1, const camera::Kanna
 // pass the epipolar check (all of them when coarse), each kf2 feature matched once. Pairs by kf1 index.
 int searchForTriangulation(const map::Atlas& a, const map::KeyFrame& kf1, const map::KeyFrame& kf2, bool coarse,
                            std::vector<std::pair<int, int>>& pairs);
+// The same with the keyframes' rays kept by the caller (b1 of kf1, b2 of kf2)
+int searchForTriangulation(const map::Atlas& a, const map::KeyFrame& kf1, const map::KeyFrame& kf2, bool coarse,
+                           std::vector<std::pair<int, int>>& pairs, Bearings& b1, Bearings& b2);
 
 // The neighbours CreateNewMapPoints goes over, in order: the 10 best covisibles, and when inertial the previous
 // keyframes (not already in) while there are <= 10, up to 10 steps back

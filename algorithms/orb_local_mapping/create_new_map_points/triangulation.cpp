@@ -13,8 +13,6 @@ namespace {
 
 constexpr int kThLow = 50;  // ORBmatcher::TH_LOW
 
-Eigen::Vector2f pt(const cv::KeyPoint& kp) { return {kp.pt.x, kp.pt.y}; }
-
 Eigen::Matrix<float, 3, 4> matrix3x4(const geometry::SE3f& T) {
     Eigen::Matrix<float, 3, 4> M;
     M << T.rotationMatrix(), T.translation();
@@ -38,10 +36,9 @@ bool triangulateDlt(const Eigen::Vector3f& x_c1, const Eigen::Vector3f& x_c2, co
 }
 
 float triangulateMatches(const camera::KannalaBrandt8& cam1, const camera::KannalaBrandt8& cam2,
+                         const Eigen::Vector3f& r1, const Eigen::Vector3f& r2,
                          const cv::KeyPoint& kp1, const cv::KeyPoint& kp2, const Eigen::Matrix3f& R12,
                          const Eigen::Vector3f& t12, float sigma1, float sigma2, Eigen::Vector3f& p3D) {
-    const Eigen::Vector3f r1 = cam1.unproject_orb(pt(kp1));
-    const Eigen::Vector3f r2 = cam2.unproject_orb(pt(kp2));
     const Eigen::Vector3f r21 = R12 * r2;
     const float cos_parallax = r1.dot(r21) / (r1.norm() * r21.norm());
     if (cos_parallax > 0.9998) return -1;
@@ -81,6 +78,12 @@ float triangulateMatches(const camera::KannalaBrandt8& cam1, const camera::Kanna
 
 int searchForTriangulation(const map::Atlas& a, const map::KeyFrame& kf1, const map::KeyFrame& kf2, bool coarse,
                            std::vector<std::pair<int, int>>& pairs) {
+    Bearings b1(*kf1.data->features, a.rig(kf1.data->rig)), b2(*kf2.data->features, a.rig(kf2.data->rig));
+    return searchForTriangulation(a, kf1, kf2, coarse, pairs, b1, b2);
+}
+
+int searchForTriangulation(const map::Atlas& a, const map::KeyFrame& kf1, const map::KeyFrame& kf2, bool coarse,
+                           std::vector<std::pair<int, int>>& pairs, Bearings& b1, Bearings& b2) {
     const orb::FrameFeatures& f1 = *kf1.data->features;
     const orb::FrameFeatures& f2 = *kf2.data->features;
     const camera::StereoRig& rig1 = a.rig(kf1.data->rig);
@@ -119,7 +122,8 @@ int searchForTriangulation(const map::Atlas& a, const map::KeyFrame& kf1, const 
                     const int right2 = f2.isRight(int(idx2)) ? 1 : 0;
                     Eigen::Vector3f p3D;
                     if (coarse ||
-                        triangulateMatches(rig1.camera(right1), rig2.camera(right2), kp1, kp2, R12[right1][right2],
+                        triangulateMatches(rig1.camera(right1), rig2.camera(right2), b1[int(idx1)], b2[int(idx2)],
+                                           kp1, kp2, R12[right1][right2],
                                            t12[right1][right2], f1.level_sigma2[std::size_t(kp1.octave)],
                                            f2.level_sigma2[std::size_t(kp2.octave)], p3D) > 0.0001f) {
                         best_idx2 = int(idx2);
@@ -172,6 +176,7 @@ int createNewMapPoints(map::Atlas& a, local_mapping::LocalMapper& m, bool recent
 
     // Ow1 carries over from one neighbour's last match to the next neighbour's baseline check (as in ORB-SLAM3)
     Eigen::Vector3f Ow1 = cur0->cameraCenter();
+    Bearings b1(f1, rig1);
     int created = 0;
     std::vector<std::pair<int, int>> pairs;
     for (std::size_t i = 0; i < neigh.size(); ++i) {
@@ -184,7 +189,8 @@ int createNewMapPoints(map::Atlas& a, local_mapping::LocalMapper& m, bool recent
         Eigen::Vector3f Ow2 = kf2->cameraCenter();
         if ((Ow2 - Ow1).norm() < kf2->data->baseline) continue;
 
-        searchForTriangulation(a, *cur, *kf2, coarse, pairs);
+        Bearings b2(f2, rig2);
+        searchForTriangulation(a, *cur, *kf2, coarse, pairs, b1, b2);
 
         for (const auto& [idx1, idx2] : pairs) {
             const cv::KeyPoint& kp1 = f1.keypoint(idx1);
@@ -201,8 +207,8 @@ int createNewMapPoints(map::Atlas& a, local_mapping::LocalMapper& m, bool recent
             const Eigen::Vector3f tcw1 = Tcw1.col(3), tcw2 = Tcw2.col(3);
 
             // Parallax between the rays
-            const Eigen::Vector3f xn1 = cam1.unproject_orb(pt(kp1));
-            const Eigen::Vector3f xn2 = cam2.unproject_orb(pt(kp2));
+            const Eigen::Vector3f& xn1 = b1[idx1];
+            const Eigen::Vector3f& xn2 = b2[idx2];
             const Eigen::Vector3f ray1 = Rcw1.transpose() * xn1, ray2 = Rcw2.transpose() * xn2;
             const float cos_rays = ray1.dot(ray2) / (ray1.norm() * ray2.norm());
             const float cos_stereo = cos_rays + 1;
