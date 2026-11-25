@@ -124,6 +124,9 @@ private:
             const map::KeyFrame& matched = *a.keyframe(loop.matched_kf);
             SE3d Tcw = loop.Tlw;
             bool good = true;
+            // The correction as detected (world_new <- world), for the log
+            const SE3d Tww_detected = cur.poseInverse().cast<double>() * Tcw;
+            const Eigen::Vector3d c_rpy = geometry::log(Tww_detected.rotationMatrix()), c_t = Tww_detected.translation();
             if (cur_map.inertial) {
                 const SE3d Twc = cur.poseInverse().cast<double>();
                 SE3d Tww_new = Twc * Tcw;
@@ -148,12 +151,18 @@ private:
                 r.matched_points = loop.matched_points;
                 r.region_points = loop.points;
                 ++loops_;
-                std::fprintf(stderr, "loop_closing: *Loop detected: kf %lu with kf %lu (map %lu)\n",
-                             (unsigned long)cur.id, (unsigned long)matched.id, (unsigned long)cur.map);
+                std::fprintf(stderr,
+                             "loop_closing: *Loop detected: kf %lu with kf %lu (map %lu), correction rpy %.4f %.4f %.4f "
+                             "rad, t %.3f %.3f %.3f m\n",
+                             (unsigned long)cur.id, (unsigned long)matched.id, (unsigned long)cur.map, c_rpy(0),
+                             c_rpy(1), c_rpy(2), c_t(0), c_t(1), c_t(2));
             } else {
                 ++bad_loops_;
-                std::fprintf(stderr, "loop_closing: kf %lu with kf %lu: BAD LOOP\n", (unsigned long)cur.id,
-                             (unsigned long)matched.id);
+                std::fprintf(stderr,
+                             "loop_closing: kf %lu with kf %lu: BAD LOOP, correction rpy %.4f %.4f %.4f rad, t %.3f %.3f "
+                             "%.3f m\n",
+                             (unsigned long)cur.id, (unsigned long)matched.id, c_rpy(0), c_rpy(1), c_rpy(2), c_t(0),
+                             c_t(1), c_t(2));
             }
             pr_.resetRegion(loop, r.erase_flags);
         }

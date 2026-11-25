@@ -71,9 +71,29 @@ public:
     std::vector<Edge> edges;
     SE3d estimate;
 
-    void computeError(Edge& e) const {
-        const Eigen::Vector3d p = e.inverse ? estimate.inverse() * e.X : estimate * e.X;
-        e.error = e.obs - e.cam->project_orb(p);
+    // The KB8 model in double (project_jacobian_d), the error and (A != nullptr) d(error)/dδ for T12 ← exp(δ)·T12,
+    // δ = (ω, υ), from one θ.
+    //   e12: q = T12·X,     dq/dω = −[q]×,    dq/dυ = I
+    //   e21: p = T12⁻¹·X,   dp/dω = R⁻¹[X]×,  dp/dυ = −R⁻¹
+    void computeError(Edge& e, Eigen::Matrix<double, 2, 6>* A = nullptr) const {
+        Eigen::Matrix<double, 2, 3> Jp;
+        if (!e.inverse) {
+            const Eigen::Vector3d q = estimate * e.X;
+            e.error = e.obs - e.cam->project_jacobian_d(q, A ? &Jp : nullptr);
+            if (A) {
+                A->leftCols<3>() = Jp * geometry::hat(q);
+                A->rightCols<3>() = -Jp;
+            }
+        } else {
+            const SE3d Tinv = estimate.inverse();
+            const Eigen::Vector3d p = Tinv * e.X;
+            e.error = e.obs - e.cam->project_jacobian_d(p, A ? &Jp : nullptr);
+            if (A) {
+                const Eigen::Matrix3d Rinv = Tinv.rotationMatrix();
+                A->leftCols<3>() = -Jp * Rinv * geometry::hat(e.X);
+                A->rightCols<3>() = Jp * Rinv;
+            }
+        }
     }
 
     // g2o's optimize(iterations) with OptimizationAlgorithmLevenberg (pose_optimizer's PoseProblem::optimize)
@@ -156,34 +176,13 @@ private:
         return chi;
     }
 
-    // d(error)/dδ for T12 ← exp(δ)·T12, δ = (ω, υ): g2o's numeric BaseBinaryEdge::linearizeOplus (central
-    // differences, δ = 1e-9), as the original's edges define no analytic Jacobian. With the KB8 projection's
-    // float internals (θ by atan2f) the differences are mostly rounding: the original optimizes with these noisy
-    // Jacobians and converges less far than an analytic one would (fewer inliers), so they are kept.
-    Eigen::Matrix<double, 2, 6> jacobian(const Edge& e) const {
-        constexpr double delta = 1e-9, scalar = 1.0 / (2 * delta);
-        Eigen::Matrix<double, 2, 6> J;
-        auto errorAt = [&](const SE3d& T) {
-            const Eigen::Vector3d p = e.inverse ? T.inverse() * e.X : T * e.X;
-            return Eigen::Vector2d(e.obs - e.cam->project_orb(p));
-        };
-        for (int d = 0; d < 6; ++d) {
-            Vector6d u = Vector6d::Zero();
-            u[d] = delta;
-            const Eigen::Vector2d plus = errorAt(expUpdate(u) * estimate);
-            u[d] = -delta;
-            const Eigen::Vector2d minus = errorAt(expUpdate(u) * estimate);
-            J.col(d) = scalar * (plus - minus);
-        }
-        return J;
-    }
-
-    void buildSystem(Matrix6d& H, Vector6d& b) const {
+    void buildSystem(Matrix6d& H, Vector6d& b) {
         H.setZero();
         b.setZero();
-        for (const Edge& e : edges) {
+        for (Edge& e : edges) {
             if (!e.active) continue;
-            const Eigen::Matrix<double, 2, 6> A = jacobian(e);
+            Eigen::Matrix<double, 2, 6> A;
+            computeError(e, &A);  // the errors are those computeActiveErrors just set; this adds the Jacobian
             double w = e.info;
             if (e.robust) {
                 double rho0, rho1;

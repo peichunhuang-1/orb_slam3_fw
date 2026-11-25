@@ -14,9 +14,12 @@
 // of the last frame that saw it; the level only sets the edge's information).
 //
 // The solver is g2o's Levenberg-Marquardt written out as in orb_tracking/shared/pose_optimizer (the original's
-// 7-dof vertex with the scale update zeroed is this 6-dof one; g2o's numeric Jacobians, see the .cpp), Huber δ = √th2: 5 iterations; the pairs with either chi2 over th2 removed from matches and from the
+// 7-dof vertex with the scale update zeroed is this 6-dof one), Huber δ = √th2: 5 iterations; the pairs with either chi2 over th2 removed from matches and from the
 // problem, the others without the kernel; fewer than 10 left: returns 0; else 10 more iterations (5 if none was
 // removed), and the pairs over th2 again removed from matches. Returns the inliers.
+// Unlike the original, the error and an analytic Jacobian come from the KB8 model in double (project_jacobian_d).
+// The original differentiates its float projection numerically with δ = 1e-9, below float rounding: its Jacobian
+// is ~0, the LM steps barely move T12 off the RANSAC guess, and wrong loop corrections follow.
 #include <vector>
 
 #include "types/geometry/se3.hpp"

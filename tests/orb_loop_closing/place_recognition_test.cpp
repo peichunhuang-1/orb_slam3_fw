@@ -4,7 +4,8 @@
 // ranges); then
 //   detectNBestCandidates, searchByBoW, both searchByProjection   exactly the original's;
 //   RelativePoseRansac      converges as the original, T12 close to its and to the truth (the sampling differs);
-//   optimizeRelativePose    from the same start and matches: T12 and the inliers as the original's;
+//   optimizeRelativePose    from the same start and matches: T12 at least as close to the truth, at least its inliers
+//                           (the original's Jacobian is ~0, optimize_relative_pose.hpp);
 //   detectFromBoW           the same matched keyframe and coincidences, the pose close, the matches nearly the same.
 #include <algorithm>
 #include <cmath>
@@ -147,16 +148,19 @@ void runCase(const std::string& name, const fixture::Rig& rig) {
     geometry::SE3d T12 = Ti.cast<double>();
     const int n_opt = orb_loop_closing::optimizeRelativePose(a, cur, c0, opt, T12, 10, true);
     const geometry::SE3d T_opt{Eigen::Matrix4d(f["opt_T12"])};
-    const double ro = angleDeg(T12.rotationMatrix(), T_opt.rotationMatrix());
-    const double to = (T12.translation() - T_opt.translation()).norm();
     const int d_opt = countDiff(s, opt, f["opt_matches"]);
-    // The original's optimizer runs on numeric Jacobians that are mostly rounding (optimize_relative_pose.cpp):
-    // from the same start the two end close, not equal (seen: inliers within 15 %, 0.05-0.3°, 2-9 mm)
+    // The original's optimizer runs on numeric Jacobians that are ~0 (optimize_relative_pose.hpp) and barely moves
+    // T12 off the start; ours (analytic) must end at least as close to the truth and keep at least its inliers
+    const double ro_true = angleDeg(T12.rotationMatrix(), T_true.rotationMatrix());
+    const double to_true = (T12.translation() - T_true.translation()).norm();
+    const double ro_ref = angleDeg(T_opt.rotationMatrix(), T_true.rotationMatrix());
+    const double to_ref = (T_opt.translation() - T_true.translation()).norm();
     const int want_opt = int(f.scalar("opt_inliers"));
-    check(std::abs(n_opt - want_opt) <= std::max(3, want_opt / 5) && d_opt <= std::max(3, want_opt / 3),
-          name + ": optimizeRelativePose inliers " + std::to_string(n_opt) + " vs " + std::to_string(want_opt) + ", " +
-              std::to_string(d_opt) + " matches differ");
-    check(ro < 0.5 && to < 0.02, name + ": optimizeRelativePose T12");
+    check(n_opt >= want_opt, name + ": optimizeRelativePose inliers " + std::to_string(n_opt) + " vs " +
+                                 std::to_string(want_opt) + ", " + std::to_string(d_opt) + " matches differ");
+    check(ro_true <= ro_ref + 0.05 && to_true <= to_ref + 0.005,
+          name + ": optimizeRelativePose T12 vs truth " + std::to_string(ro_true) + "° " + std::to_string(to_true) +
+              " m, the original's " + std::to_string(ro_ref) + "° " + std::to_string(to_ref) + " m");
 
     // DetectCommonRegionsFromBoW: once (the region it finds), then how often it detects over repeated runs (the
     // outcome depends on RANSAC's sampling, in the original too)
@@ -192,9 +196,9 @@ void runCase(const std::string& name, const fixture::Rig& rig) {
                                                  std::to_string(runs) + " vs " + std::to_string(want_det));
     std::printf("%s: candidates loop %zu merge %zu; bow %d; RANSAC %d inliers of %d (%s), vs truth %.3f° %.4f m "
                 "(original's vs it %.3f° %.4f m); projection %d / %d; optimize %d inliers (original %d), T12 vs "
-                "original %.1e° %.1e m; detect %d (%d matches, Tcw vs truth %.3f° %.4f m), %d of %d runs (original %d)\n",
+                "truth %.3f° %.4f m (original's %.3f° %.4f m); detect %d (%d matches, Tcw vs truth %.3f° %.4f m), %d of %d runs (original %d)\n",
                 name.c_str(), loop_c.size(), merge_c.size(), n_bow, n_inl, solver.correspondences(),
-                converged ? "converged" : "not converged", rt, tt, ra, ta, n1, n2, n_opt, want_opt, ro, to, int(det),
+                converged ? "converged" : "not converged", rt, tt, ra, ta, n1, n2, n_opt, want_opt, ro_true, to_true, ro_ref, to_ref, int(det),
                 n_matched, rd, td, n_det, runs, want_det);
 }
 

@@ -7,6 +7,7 @@
 #include "algorithms/orb_loop_closing/keyframe_matching/keyframe_matching.hpp"
 #include "algorithms/orb_loop_closing/optimize_relative_pose/optimize_relative_pose.hpp"
 #include "algorithms/orb_loop_closing/relative_pose_ransac/relative_pose_ransac.hpp"
+#include "types/geometry/so3.hpp"
 
 namespace orb_loop_closing {
 
@@ -289,8 +290,16 @@ bool PlaceRecognition::detectFromBoW(const std::vector<map::KeyFrameId>& candida
                 d_proj = n_proj;
 
                 if (n_proj >= kProjMatches) {
+                    const SE3d Tcm_ransac = Tcm;
                     const int n_opt = optimizeRelativePose(a, cur, *kfi, matched_mp, Tcm, 10, true);
                     d_opt = n_opt;
+                    if (debug) {
+                        const SE3d D = Tcm * Tcm_ransac.inverse();
+                        std::fprintf(stderr,
+                                     "[LC]   cand kf %lu: optimization moved T12 by %.3f deg, %.3f m (%d of %d)\n",
+                                     (unsigned long)cand, geometry::log(D.rotationMatrix()).norm() * 57.2958,
+                                     D.translation().norm(), n_opt, n_proj);
+                    }
                     if (n_opt >= kSim3Inliers) {
                         Tcw = Tcm * Tmw;
                         std::vector<map::MapPointId> matched_opt(N, map::kNone);
